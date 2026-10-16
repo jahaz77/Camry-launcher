@@ -38,6 +38,9 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
     private val photo: Bitmap? = if (skin.centerMode == "foto") loadPhoto(ctx, skin.carImage) else null
     private val photoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
+    /** Foto del Camry visto desde atrás para el tema del camino (si no hay, se dibuja uno). */
+    private val rearPhoto: Bitmap? = if (photo == null) loadPhoto(ctx, "asset:carros/camry_atras.png") else null
+
     private var offset = 0f
     private var bobTime = 0f
     private var lastFrame = 0L
@@ -117,14 +120,28 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         drawSpeed(c, cx, s)
 
         // El auto
-        val carW = 210f * s
-        val k = carW / 200f
         val bob = if (moving) (sin(bobTime * 2.0 * Math.PI / 0.7) * 1.5 * s).toFloat() else 0f
-        c.save()
-        c.translate(cx - carW / 2f, h - 26f * s - 126f * s + bob)
-        c.scale(k, k)
-        car.draw(c, skin.carBody, skin.carRoof, braking = !moving)
-        c.restore()
+        val rear = rearPhoto
+        if (rear != null) {
+            val carW = 236f * s
+            val carH = carW * rear.height / rear.width
+            val bottom = h - 18f * s
+            paint.style = Paint.Style.FILL
+            // sombra y reflejo de las calaveras en el asfalto
+            paint.color = Color.argb(170, 0, 0, 0)
+            c.drawOval(RectF(cx - carW * 0.52f, bottom - 10f * s, cx + carW * 0.52f, bottom + 8f * s), paint)
+            paint.color = Color.argb(if (moving) 45 else 85, 255, 40, 60)
+            c.drawOval(RectF(cx - carW * 0.45f, bottom - 4f * s, cx + carW * 0.45f, bottom + 12f * s), paint)
+            c.drawBitmap(rear, null, RectF(cx - carW / 2f, bottom - carH + bob, cx + carW / 2f, bottom + bob), photoPaint)
+        } else {
+            val carW = 210f * s
+            val k = carW / 200f
+            c.save()
+            c.translate(cx - carW / 2f, h - 26f * s - 126f * s + bob)
+            c.scale(k, k)
+            car.draw(c, skin.carBody, skin.carRoof, braking = !moving)
+            c.restore()
+        }
 
         if (isShown) postInvalidateOnAnimation()
     }

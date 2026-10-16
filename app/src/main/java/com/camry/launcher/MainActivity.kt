@@ -47,6 +47,13 @@ import android.widget.TextClock
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.min
+import org.osmdroid.config.Configuration as OsmConfig
+import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import java.io.File
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
@@ -72,6 +79,8 @@ class MainActivity : Activity() {
     private var controller: MediaController? = null
     private var mediaManager: MediaSessionManager? = null
     private var mediaNeedsAccess = false
+    private var map: MapView? = null
+    private var myMarker: Marker? = null
 
     // ---------------------------------------------------------------- ciclo de vida
 
@@ -99,8 +108,14 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        map?.onResume()
         refreshIphoneStatus()
         if (mediaNeedsAccess) setupMedia()
+    }
+
+    override fun onPause() {
+        map?.onPause()
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -182,14 +197,10 @@ class MainActivity : Activity() {
         column.addView(gap(12f))
         column.addView(buildDock(), lp(MATCH, px(76f)))
 
-        row.addView(buildCarPlayCard(), lp(px(280f), MATCH))
+        row.addView(buildMapCard(), lp(px(280f), MATCH))
         row.addView(gap(12f))
         road = RoadView(this, skin).apply {
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, 20f * s)
-                }
-            }
+            outlineProvider = roundOutline(20f)
             clipToOutline = true
             setOnLongClickListener { showOptions(); true }
         }
@@ -204,55 +215,144 @@ class MainActivity : Activity() {
         return root
     }
 
-    private fun buildCarPlayCard(): View {
-        val c = card()
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+    private fun roundOutline(r: Float) = object : ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: Outline) {
+            outline.setRoundRect(0, 0, view.width, view.height, r * s)
+        }
+    }
+
+    /** Mapa de la ciudad (OpenStreetMap + CARTO, sin llave ni costo) con tu ubicación. */
+    private fun buildMapCard(): View {
+        val frame = FrameLayout(this).apply {
+            background = rounded(skin.card, 20f, stroke = true)
+            outlineProvider = roundOutline(20f)
+            clipToOutline = true
+        }
+
+        OsmConfig.getInstance().load(this, getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+        OsmConfig.getInstance().userAgentValue = packageName
+        OsmConfig.getInstance().osmdroidBasePath = File(cacheDir, "osmdroid")
+        OsmConfig.getInstance().osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
+
+        val style = if (skin.isLight) "light_all" else "dark_all"
+        val source = XYTileSource(
+            "Carto-$style", 0, 19, 256, ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/$style/",
+                "https://b.basemaps.cartocdn.com/$style/",
+                "https://c.basemaps.cartocdn.com/$style/",
+                "https://d.basemaps.cartocdn.com/$style/"
+            )
+        )
+        val start = startPoint()
+        val mv = MapView(this)
+        mv.setTileSource(source)
+        mv.setMultiTouchControls(false)
+        mv.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+        mv.isTilesScaledToDpi = true
+        mv.overlayManager.tilesOverlay.setLoadingBackgroundColor(skin.card)
+        mv.overlayManager.tilesOverlay.setLoadingLineColor(skin.card)
+        mv.controller.setZoom(16.0)
+        mv.controller.setCenter(start)
+
+        val dot = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(skin.accent)
+            setStroke(px(3f), Color.WHITE)
+            setSize(px(22f), px(22f))
+        }
+        val mk = Marker(mv)
+        mk.icon = dot
+        mk.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        mk.position = start
+        mk.setOnMarkerClickListener { _, _ -> true }
+        mv.overlays.add(mk)
+        map = mv
+        myMarker = mk
+        frame.addView(mv, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        // Tocar el mapa abre Maps (el mapa no se arrastra para no distraer al manejar)
+        frame.addView(View(this).apply { setOnClickListener { openMaps() } }, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(16f), px(14f), px(16f), px(22f))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(RoadView.alpha(skin.card, 235), RoadView.alpha(skin.card, 0))
+            )
+        }
         header.addView(View(this).apply { background = rounded(Color.rgb(52, 211, 153), 4f) }, lp(px(8f), px(8f)))
         header.addView(gap(8f))
-        header.addView(label("NAVEGACIÓN · CARPLAY", 13f, skin.textDim).apply { letterSpacing = 0.08f })
-        c.addView(header)
-        c.addView(gap(16f))
+        header.addView(label("MAPA", 13f, skin.textDim).apply { letterSpacing = 0.08f })
+        frame.addView(header, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
 
-        val phoneRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        val phoneBox = FrameLayout(this).apply { background = rounded(skin.button, 18f) }
-        phoneBox.addView(icon(R.drawable.ic_smartphone, 34f, skin.text), FrameLayout.LayoutParams(px(34f), px(34f), Gravity.CENTER))
-        phoneRow.addView(phoneBox, lp(px(64f), px(64f)))
-        phoneRow.addView(gap(14f))
-        val phoneText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        phoneText.addView(label("iPhone", 20f, skin.text, medium = true))
-        phoneText.addView(gap(4f))
-        carplayStatus = label("Listo para CarPlay", 14f, skin.textDim)
-        phoneText.addView(carplayStatus)
-        phoneRow.addView(phoneText)
-        c.addView(phoneRow)
-        c.addView(gap(16f))
-        c.addView(label("Tus indicaciones de Maps o Waze aparecen dentro de CarPlay. Ábrelo con un toque.", 15f, RoadView.mix(skin.textDim, skin.text, 0.35f)).apply {
-            setLineSpacing(0f, 1.3f)
-        })
-        c.addView(spacer())
-
-        val open = LinearLayout(this).apply {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(12f), px(28f), px(12f), px(12f))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(RoadView.alpha(skin.card, 0), RoadView.alpha(skin.card, 240))
+            )
+        }
+        bar.addView(label("© OpenStreetMap · © CARTO", 10f, skin.textDim).apply { gravity = Gravity.END }, lp(MATCH, WRAP))
+        bar.addView(gap(6f))
+        val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val maps = LinearLayout(this).apply {
             gravity = Gravity.CENTER
-            background = pressable(skin.accent, 16f)
+            background = pressable(skin.accent, 14f)
+            setOnClickListener { openMaps() }
+            setOnLongClickListener { pickApp("slot_maps"); true }
+        }
+        maps.addView(icon(R.drawable.ic_nav, 20f, Color.WHITE))
+        maps.addView(gap(8f))
+        maps.addView(label("Abrir Maps", 16f, Color.WHITE, medium = true))
+        buttons.addView(maps, lp(0, px(52f), 1f))
+        buttons.addView(gap(8f))
+        // CarPlay discreto, por si quieres navegar desde el iPhone
+        val cp = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            background = pressable(skin.button, 14f)
+            setPadding(px(12f), 0, px(12f), 0)
+            contentDescription = "Abrir CarPlay"
             setOnClickListener { openCarPlay() }
             setOnLongClickListener { pickApp("slot_carplay"); true }
         }
-        open.addView(icon(R.drawable.ic_nav, 24f, Color.WHITE))
-        open.addView(gap(10f))
-        open.addView(label("Abrir CarPlay", 18f, Color.WHITE, medium = true))
-        c.addView(open, lp(MATCH, px(72f)))
-        c.addView(gap(8f))
+        cp.addView(icon(R.drawable.ic_carplay, 18f, skin.textDim))
+        cp.addView(gap(6f))
+        carplayStatus = label("CarPlay", 13f, skin.textDim)
+        cp.addView(carplayStatus)
+        buttons.addView(cp, lp(WRAP, px(52f)))
+        bar.addView(buttons, lp(MATCH, WRAP))
+        frame.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
+        return frame
+    }
 
-        val maps = LinearLayout(this).apply {
-            gravity = Gravity.CENTER
-            background = pressable(skin.button, 14f)
-            setOnClickListener { openMaps() }
+    private fun startPoint(): GeoPoint {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val last = runCatching {
+                lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            }.getOrNull()
+            if (last != null) return GeoPoint(last.latitude, last.longitude)
         }
-        maps.addView(icon(R.drawable.ic_pin, 18f, skin.text))
-        maps.addView(gap(8f))
-        maps.addView(label("Maps en el estéreo", 15f, skin.text))
-        c.addView(maps, lp(MATCH, px(48f)))
-        return c
+        return GeoPoint(25.6866, -100.3161) // Monterrey
+    }
+
+    private var lastZoom = 16.0
+
+    private fun updateMap(l: Location, kmh: Float) {
+        val mv = map ?: return
+        val gp = GeoPoint(l.latitude, l.longitude)
+        myMarker?.position = gp
+        val z = when {
+            kmh > 80f -> 14.5
+            kmh > 40f -> 15.5
+            else -> 16.5
+        }
+        if (z != lastZoom) { lastZoom = z; mv.controller.zoomTo(z) }
+        mv.controller.animateTo(gp)
+        mv.invalidate()
     }
 
     private fun buildClockCard(): View {
@@ -583,6 +683,7 @@ class MainActivity : Activity() {
             val kmh = if (l.hasSpeed()) l.speed * 3.6f else 0f
             road.speedKmh = if (kmh < 2f) 0f else kmh
             road.heading = if (l.hasBearing() && kmh >= 5f) "Rumbo " + compass(l.bearing) else "GPS listo"
+            updateMap(l, kmh)
         }
 
         override fun onProviderEnabled(provider: String) {}
@@ -619,10 +720,10 @@ class MainActivity : Activity() {
             val dev: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
             if (dev?.vendorId != APPLE_VENDOR_ID) return
             if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-                carplayStatus.text = "iPhone conectado"
+                carplayStatus.text = "iPhone listo"
                 if (prefs.getBoolean("auto_carplay", true)) handler.postDelayed({ openCarPlay() }, 1500L)
             } else {
-                carplayStatus.text = "Listo para CarPlay"
+                carplayStatus.text = "CarPlay"
             }
         }
     }
@@ -630,7 +731,7 @@ class MainActivity : Activity() {
     private fun refreshIphoneStatus() {
         val um = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
         val connected = runCatching { um.deviceList.values.any { it.vendorId == APPLE_VENDOR_ID } }.getOrDefault(false)
-        carplayStatus.text = if (connected) "iPhone conectado" else "Listo para CarPlay"
+        carplayStatus.text = if (connected) "iPhone listo" else "CarPlay"
     }
 
     // ---------------------------------------------------------------- música

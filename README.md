@@ -2,8 +2,9 @@
 
 Pantalla de inicio para el estéreo Android TS18 (1024×600) del Camry 2008.
 
-- Panel central con la velocidad del GPS y el Camry blanco con techo azul avanzando sobre el camino.
-- Botón grande para abrir **CarPlay (TLINK5)**, y apertura automática al conectar el iPhone por USB.
+- Panel central con la velocidad del GPS y tu Camry (foto real, vista trasera) avanzando sobre el camino.
+- Mapa de la ciudad con tu ubicación (OpenStreetMap + CARTO, gratis, necesita internet). Tócalo para abrir Maps.
+- Botón discreto de **CarPlay (TLINK5)**, y apertura automática al conectar el iPhone por USB.
 - Tarjeta de música con lo que suena (Bluetooth, Spotify, etc.).
 - Barra con Mapas, CarPlay, Música, Teléfono, Radio, Cámara, Ajustes y Apps.
   **Mantén presionado** cualquier botón para elegir qué app abre.
