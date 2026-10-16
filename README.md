@@ -7,7 +7,9 @@ Pantalla de inicio para el estéreo Android TS18 (1024×600) del Camry 2008.
 - Tarjeta de música con lo que suena (Bluetooth, Spotify, etc.).
 - Barra con Mapas, CarPlay, Música, Teléfono, Radio, Cámara, Ajustes y Apps.
   **Mantén presionado** cualquier botón para elegir qué app abre.
-- **Temas**: botón de la paleta (o mantén presionado el camino).
+- **Temas y opciones**: botón de la paleta (o mantén presionado el panel central).
+  Incluye *Mi Camry* (oscuro y claro) con la foto del auto y el velocímetro, sin animación.
+- **Saludo de voz** al encender: "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?" (el texto se puede cambiar en Opciones).
 
 ## Descargar e instalar
 

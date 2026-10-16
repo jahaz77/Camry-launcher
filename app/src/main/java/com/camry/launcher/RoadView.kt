@@ -1,6 +1,8 @@
 package com.camry.launcher
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -24,7 +26,17 @@ import kotlin.math.sin
 class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
 
     var speedKmh = 0f
+        set(v) {
+            if (field != v) { field = v; if (photo != null) invalidate() }
+        }
     var heading = "Esperando GPS"
+        set(v) {
+            if (field != v) { field = v; if (photo != null) invalidate() }
+        }
+
+    /** Foto del auto para los temas con centro "foto" (sin animación). */
+    private val photo: Bitmap? = if (skin.centerMode == "foto") loadPhoto(ctx, skin.carImage) else null
+    private val photoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
     private var offset = 0f
     private var bobTime = 0f
@@ -36,6 +48,7 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
     private val car = CarPainter()
 
     override fun onDraw(c: Canvas) {
+        photo?.let { drawPhotoMode(c, it); return }
         val now = SystemClock.uptimeMillis()
         val dt = if (lastFrame == 0L) 0f else ((now - lastFrame) / 1000f).coerceAtMost(0.1f)
         lastFrame = now
@@ -101,7 +114,67 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         c.drawRect(0f, fadeTop, w, h, paint)
         paint.shader = null
 
-        // Velocidad
+        drawSpeed(c, cx, s)
+
+        // El auto
+        val carW = 210f * s
+        val k = carW / 200f
+        val bob = if (moving) (sin(bobTime * 2.0 * Math.PI / 0.7) * 1.5 * s).toFloat() else 0f
+        c.save()
+        c.translate(cx - carW / 2f, h - 26f * s - 126f * s + bob)
+        c.scale(k, k)
+        car.draw(c, skin.carBody, skin.carRoof, braking = !moving)
+        c.restore()
+
+        if (isShown) postInvalidateOnAnimation()
+    }
+
+    /** Tema "foto": la foto real del auto, quieta, con el velocímetro encima. */
+    private fun drawPhotoMode(c: Canvas, bmp: Bitmap) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val s = h / 484f
+        val cx = w / 2f
+        c.drawColor(skin.road)
+
+        // Resplandor detrás del auto
+        val glowY = h * 0.66f
+        paint.style = Paint.Style.FILL
+        paint.shader = RadialGradient(
+            cx, glowY, w * 0.6f,
+            intArrayOf(alpha(skin.accent, if (skin.isLight) 45 else 80), alpha(skin.accent, 0)), null, Shader.TileMode.CLAMP
+        )
+        c.save()
+        c.scale(1f, 0.55f, cx, glowY)
+        c.drawCircle(cx, glowY, w * 0.6f, paint)
+        c.restore()
+        paint.shader = null
+
+        // Tamaño del auto: lo más grande posible debajo del velocímetro
+        val aspect = bmp.width.toFloat() / bmp.height
+        var carW = w * 0.94f
+        var carH = carW / aspect
+        val maxH = h - 150f * s - 24f * s
+        if (carH > maxH) { carH = maxH; carW = carH * aspect }
+        val bottom = h - 24f * s
+        val left = cx - carW / 2f
+
+        // Sombra en el piso
+        paint.shader = RadialGradient(
+            cx, bottom - 6f * s, carW * 0.5f,
+            intArrayOf(Color.argb(if (skin.isLight) 90 else 170, 0, 0, 0), Color.argb(0, 0, 0, 0)), null, Shader.TileMode.CLAMP
+        )
+        c.save()
+        c.scale(1f, 0.08f, cx, bottom - 6f * s)
+        c.drawCircle(cx, bottom - 6f * s, carW * 0.5f, paint)
+        c.restore()
+        paint.shader = null
+
+        c.drawBitmap(bmp, null, RectF(left, bottom - carH, left + carW, bottom), photoPaint)
+        drawSpeed(c, cx, s)
+    }
+
+    private fun drawSpeed(c: Canvas, cx: Float, s: Float) {
         textPaint.color = skin.text
         textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         textPaint.textSize = 72f * s
@@ -115,18 +188,6 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         textPaint.textSize = 13f * s
         textPaint.letterSpacing = 0f
         c.drawText(heading, cx, 22f * s + 108f * s, textPaint)
-
-        // El auto
-        val carW = 210f * s
-        val k = carW / 200f
-        val bob = if (moving) (sin(bobTime * 2.0 * Math.PI / 0.7) * 1.5 * s).toFloat() else 0f
-        c.save()
-        c.translate(cx - carW / 2f, h - 26f * s - 126f * s + bob)
-        c.scale(k, k)
-        car.draw(c, skin.carBody, skin.carRoof, braking = !moving)
-        c.restore()
-
-        if (isShown) postInvalidateOnAnimation()
     }
 
     /** Dibuja segmentos en perspectiva real: z = 1 es la parte baja de la pantalla. */
@@ -160,6 +221,14 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
     }
 
     companion object {
+        fun loadPhoto(ctx: Context, path: String?): Bitmap? = runCatching {
+            when {
+                path == null -> null
+                path.startsWith("asset:") -> ctx.assets.open(path.removePrefix("asset:")).use { BitmapFactory.decodeStream(it) }
+                else -> BitmapFactory.decodeFile(path)
+            }
+        }.getOrNull()
+
         fun alpha(color: Int, a: Int) = Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
         fun mix(a: Int, b: Int, t: Float) = Color.rgb(
             (Color.red(a) + (Color.red(b) - Color.red(a)) * t).roundToInt(),

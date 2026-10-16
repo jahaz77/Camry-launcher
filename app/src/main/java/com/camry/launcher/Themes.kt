@@ -19,8 +19,15 @@ data class LauncherTheme(
     val textDim: Int,
     val carBody: Int,
     val carRoof: Int,
-    val backgroundImage: String?
-)
+    val backgroundImage: String?,
+    /** "camino" = auto dibujado avanzando; "foto" = foto del auto, sin animación. */
+    val centerMode: String = "camino",
+    /** Ruta de la foto del auto: "asset:carros/x.png" o una ruta de archivo. */
+    val carImage: String? = null
+) {
+    val isLight: Boolean
+        get() = (0.299 * Color.red(card) + 0.587 * Color.green(card) + 0.114 * Color.blue(card)) > 150
+}
 
 object ThemeManager {
     private const val PREFS = "camry_prefs"
@@ -65,6 +72,14 @@ object ThemeManager {
     private fun parse(id: String, o: JSONObject, dir: File?): LauncherTheme {
         val img = o.optString("imagenFondo", "").trim()
         val imgPath = if (img.isNotEmpty() && dir != null) File(dir, img).takeIf { it.exists() }?.absolutePath else null
+        val carName = o.optString("imagenCarro", "").trim()
+        val carPath = when {
+            carName.isEmpty() -> null
+            dir == null -> "asset:carros/$carName"
+            File(dir, carName).exists() -> File(dir, carName).absolutePath
+            else -> "asset:carros/$carName"
+        }
+        val mode = if (o.optString("centro", "camino").trim() == "foto" && carPath != null) "foto" else "camino"
         return LauncherTheme(
             id = id,
             name = o.optString("nombre", dir?.name ?: "Tema"),
@@ -77,7 +92,9 @@ object ThemeManager {
             textDim = color(o, "textoSecundario", "#8D97A5"),
             carBody = color(o, "carroceria", "#F4F6F8"),
             carRoof = color(o, "techo", "#1F4FA8"),
-            backgroundImage = imgPath
+            backgroundImage = imgPath,
+            centerMode = mode,
+            carImage = carPath
         )
     }
 
@@ -110,6 +127,9 @@ object ThemeManager {
                   carroceria        Color de la carrocería del auto
                   techo             Color del techo del auto
                   imagenFondo       (opcional) nombre de un PNG/JPG dentro de la misma carpeta, 1024x600
+                  centro            "camino" (auto animado) o "foto" (foto de tu auto, sin animación)
+                  imagenCarro       con centro "foto": PNG con fondo transparente dentro de la carpeta
+                                    (o "camry.png" para usar la foto incluida del Camry)
 
                 Después, en el launcher toca el botón de la paleta y elige el tema.
                 """.trimIndent()

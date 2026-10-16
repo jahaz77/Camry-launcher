@@ -85,8 +85,16 @@ class MainActivity : Activity() {
         registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED).apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         })
+        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON).apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+        })
         setupMedia()
         handler.post(ticker)
+        // Primer arranque del estéreo (no al cambiar de tema)
+        if (!greetedThisRun) {
+            greetedThisRun = true
+            if (SystemClock.elapsedRealtime() < 5 * 60_000L) greetSoon()
+        }
     }
 
     override fun onResume() {
@@ -98,6 +106,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(usbReceiver) }
+        runCatching { unregisterReceiver(screenReceiver) }
         runCatching { locationManager?.removeUpdates(locationListener) }
         runCatching { mediaManager?.removeOnActiveSessionsChangedListener(sessionsListener) }
         controller?.unregisterCallback(mediaCallback)
@@ -129,11 +138,13 @@ class MainActivity : Activity() {
     private fun rounded(color: Int, radius: Float, stroke: Boolean = false) = GradientDrawable().apply {
         cornerRadius = radius * s
         setColor(color)
-        if (stroke) setStroke(1, Color.argb(16, 255, 255, 255))
+        if (stroke) setStroke(1, if (skin.isLight) Color.argb(22, 0, 0, 0) else Color.argb(16, 255, 255, 255))
     }
 
-    private fun pressable(color: Int, radius: Float) =
-        RippleDrawable(ColorStateList.valueOf(Color.argb(50, 255, 255, 255)), rounded(color, radius), rounded(Color.WHITE, radius))
+    private fun pressable(color: Int, radius: Float) = RippleDrawable(
+        ColorStateList.valueOf(if (skin.isLight) Color.argb(40, 0, 0, 0) else Color.argb(50, 255, 255, 255)),
+        rounded(color, radius), rounded(Color.WHITE, radius)
+    )
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -180,7 +191,7 @@ class MainActivity : Activity() {
                 }
             }
             clipToOutline = true
-            setOnLongClickListener { showThemes(); true }
+            setOnLongClickListener { showOptions(); true }
         }
         row.addView(road, lp(0, MATCH, 1f))
         row.addView(gap(12f))
@@ -270,8 +281,8 @@ class MainActivity : Activity() {
 
         val themeBtn = FrameLayout(this).apply {
             background = pressable(skin.button, 16f)
-            contentDescription = "Temas"
-            setOnClickListener { showThemes() }
+            contentDescription = "Temas y opciones"
+            setOnClickListener { showOptions() }
         }
         themeBtn.addView(icon(R.drawable.ic_palette, 26f, skin.text), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
         c.addView(themeBtn, lp(px(56f), px(56f)))
@@ -433,24 +444,89 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- temas
 
+    private fun dialog() = AlertDialog.Builder(
+        this,
+        if (skin.isLight) android.R.style.Theme_DeviceDefault_Light_Dialog_Alert else android.R.style.Theme_DeviceDefault_Dialog_Alert
+    )
+
+    private fun showOptions() {
+        val auto = prefs.getBoolean("auto_carplay", true)
+        val greet = Greeter.isOn(this)
+        val items = arrayOf(
+            "Cambiar tema",
+            "Saludo de voz al encender: " + if (greet) "Sí" else "No",
+            "Cambiar el texto del saludo",
+            "Probar el saludo",
+            "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No"
+        )
+        dialog().setTitle("Opciones")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showThemes()
+                    1 -> { Greeter.setOn(this, !greet); toast(if (!greet) "Saludo activado" else "Saludo desactivado") }
+                    2 -> editGreeting()
+                    3 -> Greeter.speak(this) { msg -> runOnUiThread { toast(msg) } }
+                    4 -> {
+                        prefs.edit().putBoolean("auto_carplay", !auto).apply()
+                        toast(if (!auto) "CarPlay se abrirá al conectar el iPhone" else "Apertura automática desactivada")
+                    }
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
     private fun showThemes() {
         val all = ThemeManager.loadAll(this)
         val current = all.indexOfFirst { it.id == skin.id }.coerceAtLeast(0)
         var picked = current
-        val auto = prefs.getBoolean("auto_carplay", true)
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Temas")
+        dialog().setTitle("Temas")
             .setSingleChoiceItems(all.map { it.name }.toTypedArray(), current) { _, which -> picked = which }
             .setPositiveButton("Aplicar") { _, _ ->
                 ThemeManager.select(this, all[picked].id)
                 recreate()
             }
-            .setNeutralButton(if (auto) "Auto CarPlay: Sí" else "Auto CarPlay: No") { _, _ ->
-                prefs.edit().putBoolean("auto_carplay", !auto).apply()
-                toast(if (!auto) "CarPlay se abrirá al conectar el iPhone" else "Apertura automática desactivada")
-            }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun editGreeting() {
+        val input = android.widget.EditText(this).apply {
+            setText(Greeter.text(this@MainActivity))
+            setSelection(text.length)
+        }
+        val box = FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) }
+        dialog().setTitle("Texto del saludo")
+            .setView(box)
+            .setPositiveButton("Guardar") { _, _ ->
+                val t = input.text.toString().trim()
+                Greeter.setText(this, t.ifEmpty { Greeter.DEFAULT_TEXT })
+                Greeter.speak(this) { msg -> runOnUiThread { toast(msg) } }
+            }
+            .setNeutralButton("Original") { _, _ -> Greeter.setText(this, Greeter.DEFAULT_TEXT) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- saludo al encender
+
+    /** El TS18 apaga la pantalla al quitar la llave y la prende al ponerla. */
+    private var screenOffAt = 0L
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> screenOffAt = SystemClock.elapsedRealtime()
+                Intent.ACTION_SCREEN_ON -> {
+                    val away = SystemClock.elapsedRealtime() - screenOffAt
+                    if (screenOffAt != 0L && away > 60_000L) greetSoon()
+                }
+            }
+        }
+    }
+
+    private fun greetSoon() {
+        if (Greeter.isOn(this)) handler.postDelayed({ Greeter.speak(this) }, 3000L)
     }
 
     private fun decode(path: String): Bitmap? = runCatching {
@@ -666,5 +742,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val APPLE_VENDOR_ID = 0x05AC
+        private var greetedThisRun = false
     }
 }

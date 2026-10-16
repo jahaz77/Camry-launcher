@@ -1,0 +1,12 @@
+{
+  "nombre": "Mi Camry (oscuro)",
+  "centro": "foto",
+  "imagenCarro": "camry.png",
+  "fondo": "#05070A",
+  "tarjeta": "#10141A",
+  "boton": "#181D25",
+  "camino": "#080B10",
+  "acento": "#2F5BE0",
+  "texto": "#E8EDF3",
+  "textoSecundario": "#8D97A5"
+}
