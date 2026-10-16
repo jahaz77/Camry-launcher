@@ -14,8 +14,8 @@ import java.util.Locale
 
 /**
  * Saludo al encender el auto.
- * 1) Si existe CamryLauncher/saludo.mp3 (o .m4a / .wav / .ogg) lo reproduce tal cual.
- * 2) Si no, lo dice con la voz del sistema (texto a voz).
+ * 1) Si hay audios en CamryLauncher/saludos, reproduce uno al azar.
+ * 2) Si no, dice una de las frases (una por línea) con la voz del sistema.
  */
 object Greeter {
     const val DEFAULT_TEXT = "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?"
@@ -37,16 +37,46 @@ object Greeter {
     fun text(ctx: Context): String = ThemeManager.prefs(ctx).getString(KEY_TEXT, null) ?: DEFAULT_TEXT
     fun setText(ctx: Context, t: String) = ThemeManager.prefs(ctx).edit().putString(KEY_TEXT, t).apply()
 
-    fun customAudio(): File? {
-        val dir = File(Environment.getExternalStorageDirectory(), "CamryLauncher")
-        return listOf("saludo.mp3", "saludo.m4a", "saludo.wav", "saludo.ogg")
-            .map { File(dir, it) }.firstOrNull { it.exists() && it.length() > 0 }
+    private val AUDIO_EXT = setOf("mp3", "m4a", "wav", "ogg", "aac", "flac")
+
+    fun baseDir(): File = File(Environment.getExternalStorageDirectory(), "CamryLauncher")
+    fun greetingsDir(): File = File(baseDir(), "saludos")
+
+    /** Todos los audios de saludo: la carpeta CamryLauncher/saludos y el saludo.mp3 de antes. */
+    fun audioFiles(): List<File> {
+        val inFolder = greetingsDir().listFiles()?.filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
+        val legacy = baseDir().listFiles()?.filter { it.isFile && it.nameWithoutExtension.lowercase() == "saludo" && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
+        return (inFolder + legacy).sortedBy { it.name }
+    }
+
+    /** Elige uno al azar, sin repetir el último que sonó. */
+    private fun pickAudio(ctx: Context): File? {
+        val all = audioFiles()
+        if (all.isEmpty()) return null
+        val prefs = ThemeManager.prefs(ctx)
+        val last = prefs.getString("greet_last", null)
+        val pool = if (all.size > 1) all.filter { it.name != last } else all
+        val f = pool.random()
+        prefs.edit().putString("greet_last", f.name).apply()
+        return f
+    }
+
+    /** Frases para la voz del sistema: una por línea, se elige una al azar. */
+    private fun pickPhrase(ctx: Context): String {
+        val lines = text(ctx).split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        if (lines.isEmpty()) return DEFAULT_TEXT
+        val prefs = ThemeManager.prefs(ctx)
+        val last = prefs.getString("greet_last_text", null)
+        val pool = if (lines.size > 1) lines.filter { it != last } else lines
+        val p = pool.random()
+        prefs.edit().putString("greet_last_text", p).apply()
+        return p
     }
 
     fun speak(ctx: Context, onError: ((String) -> Unit)? = null) {
         val app = ctx.applicationContext
         stop()
-        customAudio()?.let { file ->
+        pickAudio(app)?.let { file ->
             if (playFile(app, file, onError)) return
         }
         speakTts(app, onError)
@@ -69,7 +99,7 @@ object Greeter {
     }
 
     private fun speakTts(app: Context, onError: ((String) -> Unit)?) {
-        val phrase = text(app)
+        val phrase = pickPhrase(app)
         var engine: TextToSpeech? = null
         engine = TextToSpeech(app) { status ->
             val t = engine ?: return@TextToSpeech
@@ -108,7 +138,7 @@ object Greeter {
         val app = ctx.applicationContext
         val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val sb = StringBuilder()
-        sb.append("Archivo saludo: ").append(customAudio()?.name ?: "no hay").append('\n')
+        sb.append("Audios de saludo: ").append(audioFiles().size).append('\n')
         sb.append("Volumen media: ").append(am.getStreamVolume(AudioManager.STREAM_MUSIC))
             .append('/').append(am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)).append('\n')
         var engine: TextToSpeech? = null

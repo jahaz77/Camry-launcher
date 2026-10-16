@@ -558,7 +558,9 @@ class MainActivity : Activity() {
             "Cambiar el texto del saludo",
             "Probar el saludo",
             "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No",
-            "Diagnóstico de voz"
+            "Diagnóstico de voz",
+            "Agregar audios de saludo",
+            "Audios de saludo guardados (" + Greeter.audioFiles().size + ")"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -581,6 +583,8 @@ class MainActivity : Activity() {
                                 .show()
                         }
                     }
+                    6 -> pickGreetingAudios()
+                    7 -> showGreetingAudios()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -604,10 +608,12 @@ class MainActivity : Activity() {
     private fun editGreeting() {
         val input = android.widget.EditText(this).apply {
             setText(Greeter.text(this@MainActivity))
+            hint = "Una frase por línea"
+            minLines = 3
             setSelection(text.length)
         }
         val box = FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) }
-        dialog().setTitle("Texto del saludo")
+        dialog().setTitle("Frases del saludo (una por línea, sale una al azar)")
             .setView(box)
             .setPositiveButton("Guardar") { _, _ ->
                 val t = input.text.toString().trim()
@@ -617,6 +623,77 @@ class MainActivity : Activity() {
             .setNeutralButton("Original") { _, _ -> Greeter.setText(this, Greeter.DEFAULT_TEXT) }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun pickGreetingAudios() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("audio/*")
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, REQ_AUDIO)
+        } catch (e: Exception) {
+            toast("Copia tus audios a la carpeta CamryLauncher/saludos con el administrador de archivos")
+        }
+    }
+
+    @Deprecated("API clásica de resultados")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_AUDIO || resultCode != RESULT_OK || data == null) return
+        val uris = mutableListOf<Uri>()
+        data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
+        if (uris.isEmpty()) data.data?.let { uris.add(it) }
+        val dir = Greeter.greetingsDir().apply { mkdirs() }
+        var ok = 0
+        for (u in uris) {
+            runCatching {
+                var name = "saludo_${System.currentTimeMillis()}.mp3"
+                contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0)?.let { n -> name = n.replace(Regex("[^A-Za-z0-9._ -]"), "_") }
+                }
+                val out = File(dir, name)
+                contentResolver.openInputStream(u)?.use { input -> out.outputStream().use { input.copyTo(it) } }
+                ok++
+            }
+        }
+        toast(if (ok > 0) "Listo: $ok audio(s) agregados. Saldrá uno al azar." else "No pude copiar los audios")
+    }
+
+    private fun showGreetingAudios() {
+        val files = Greeter.audioFiles()
+        if (files.isEmpty()) {
+            toast("No hay audios. Usa \"Agregar audios de saludo\" o cópialos a CamryLauncher/saludos")
+            return
+        }
+        dialog().setTitle("Toca uno para escucharlo")
+            .setItems(files.map { it.name }.toTypedArray()) { _, which -> playPreview(files[which]) }
+            .setNeutralButton("Borrar uno") { _, _ ->
+                dialog().setTitle("¿Cuál borro?")
+                    .setItems(files.map { it.name }.toTypedArray()) { _, w ->
+                        toast(if (files[w].delete()) "Borrado: ${files[w].name}" else "No se pudo borrar")
+                    }
+                    .setNegativeButton("Cancelar", null).show()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private var preview: android.media.MediaPlayer? = null
+
+    private fun playPreview(f: File) {
+        runCatching { preview?.release() }
+        preview = runCatching {
+            android.media.MediaPlayer().apply {
+                setDataSource(f.absolutePath)
+                setOnCompletionListener { it.release(); if (preview === it) preview = null }
+                prepare()
+                start()
+            }
+        }.getOrNull()
+        if (preview == null) toast("No pude reproducir ${f.name}")
     }
 
     // ---------------------------------------------------------------- saludo al encender
@@ -673,6 +750,7 @@ class MainActivity : Activity() {
     private fun onPermissionsReady() {
         if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
             ThemeManager.ensureUserDir(this)
+            runCatching { Greeter.greetingsDir().mkdirs() }
         }
         startLocation()
     }
@@ -872,5 +950,6 @@ class MainActivity : Activity() {
     companion object {
         private const val APPLE_VENDOR_ID = 0x05AC
         private var greetedThisRun = false
+        private const val REQ_AUDIO = 7
     }
 }
