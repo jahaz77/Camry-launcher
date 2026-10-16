@@ -10,6 +10,7 @@ Pantalla de inicio para el estéreo Android TS18 (1024×600) del Camry 2008.
 - **Temas y opciones**: botón de la paleta (o mantén presionado el panel central).
   Incluye *Mi Camry* (oscuro y claro) con la foto del auto y el velocímetro, sin animación.
 - **Saludo de voz** al encender: "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?" (el texto se puede cambiar en Opciones).
+  Si el estéreo no tiene voz en español, pon un audio grabado en `CamryLauncher/saludo.mp3` y se reproduce ese.
 
 ## Descargar e instalar
 

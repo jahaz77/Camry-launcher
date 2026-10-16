@@ -457,7 +457,8 @@ class MainActivity : Activity() {
             "Saludo de voz al encender: " + if (greet) "Sí" else "No",
             "Cambiar el texto del saludo",
             "Probar el saludo",
-            "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No"
+            "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No",
+            "Diagnóstico de voz"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -469,6 +470,16 @@ class MainActivity : Activity() {
                     4 -> {
                         prefs.edit().putBoolean("auto_carplay", !auto).apply()
                         toast(if (!auto) "CarPlay se abrirá al conectar el iPhone" else "Apertura automática desactivada")
+                    }
+                    5 -> Greeter.diagnose(this) { info ->
+                        runOnUiThread {
+                            dialog().setTitle("Diagnóstico de voz").setMessage(info)
+                                .setPositiveButton("OK", null)
+                                .setNeutralButton("Ajustes de voz") { _, _ ->
+                                    AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
+                                }
+                                .show()
+                        }
                     }
                 }
             }
@@ -525,8 +536,14 @@ class MainActivity : Activity() {
         }
     }
 
+    private var lastGreet = 0L
+
     private fun greetSoon() {
-        if (Greeter.isOn(this)) handler.postDelayed({ Greeter.speak(this) }, 3000L)
+        if (!Greeter.isOn(this)) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastGreet != 0L && now - lastGreet < 60_000L) return // no repetir
+        lastGreet = now
+        handler.postDelayed({ Greeter.speak(this) { msg -> runOnUiThread { toast(msg) } } }, 3500L)
     }
 
     private fun decode(path: String): Bitmap? = runCatching {
@@ -727,8 +744,19 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- utilidades
 
+    private var lastTickElapsed = 0L
+    private var lastTickUptime = 0L
+
     private val ticker = object : Runnable {
         override fun run() {
+            // Al quitar la llave el TS18 se "duerme": el reloj real avanza pero el tiempo activo no.
+            // Si al volver hubo más de un minuto dormido, es que se acaba de encender el auto.
+            val e = SystemClock.elapsedRealtime()
+            val u = SystemClock.uptimeMillis()
+            if (lastTickElapsed != 0L && (e - lastTickElapsed) - (u - lastTickUptime) > 60_000L) greetSoon()
+            lastTickElapsed = e
+            lastTickUptime = u
+
             if (lastFix != 0L && SystemClock.elapsedRealtime() - lastFix > 5000L) {
                 road.speedKmh = 0f
                 road.heading = "Buscando GPS"
