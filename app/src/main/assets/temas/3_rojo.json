@@ -1,0 +1,12 @@
+{
+  "nombre": "Rojo Deportivo",
+  "fondo": "#0A0A0B",
+  "tarjeta": "#141416",
+  "boton": "#1E1E21",
+  "camino": "#0D0D0F",
+  "acento": "#E3122B",
+  "texto": "#F1F1F2",
+  "textoSecundario": "#9A9AA0",
+  "carroceria": "#F4F6F8",
+  "techo": "#1F4FA8"
+}
