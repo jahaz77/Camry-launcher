@@ -108,6 +108,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (ThemeManager.current(this).id != skin.id) { recreate(); return }
         map?.onResume()
         refreshIphoneStatus()
         if (mediaNeedsAccess) setupMedia()
@@ -364,7 +365,7 @@ class MainActivity : Activity() {
         texts.addView(TextClock(this).apply {
             format24Hour = "HH:mm"
             format12Hour = "HH:mm"
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, 44f * s)
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, 40f * s)
             setTextColor(skin.text)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             includeFontPadding = false
@@ -379,13 +380,21 @@ class MainActivity : Activity() {
         })
         c.addView(texts, lp(0, WRAP, 1f))
 
+        val micBtn = FrameLayout(this).apply {
+            background = pressable(skin.accent, 16f)
+            contentDescription = "Asistente de voz"
+            setOnClickListener { openAssistant() }
+        }
+        micBtn.addView(icon(R.drawable.ic_mic, 26f, Color.WHITE), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
+        c.addView(micBtn, lp(px(50f), px(50f)))
+        c.addView(gap(8f))
         val themeBtn = FrameLayout(this).apply {
             background = pressable(skin.button, 16f)
             contentDescription = "Temas y opciones"
             setOnClickListener { showOptions() }
         }
         themeBtn.addView(icon(R.drawable.ic_palette, 26f, skin.text), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
-        c.addView(themeBtn, lp(px(56f), px(56f)))
+        c.addView(themeBtn, lp(px(50f), px(50f)))
         return c
     }
 
@@ -560,7 +569,11 @@ class MainActivity : Activity() {
             "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No",
             "Diagnóstico de voz",
             "Agregar audios de saludo",
-            "Audios de saludo guardados (" + Greeter.audioFiles().size + ")"
+            "Audios de saludo guardados (" + Greeter.audioFiles().size + ")",
+            "Asistente: llave de la API" + if (Assistant.apiKey(this).isBlank()) " (falta)" else " (lista)",
+            "Asistente: dirección de casa",
+            "Asistente: dirección de trabajo",
+            "Asistente: modelo (" + (if (Assistant.model(this) == Assistant.MODEL_FAST) "rápido" else "más listo") + ")"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -585,6 +598,14 @@ class MainActivity : Activity() {
                     }
                     6 -> pickGreetingAudios()
                     7 -> showGreetingAudios()
+                    8 -> askText("Llave de la API de Claude", "sk-ant-…", Assistant.apiKey(this), secret = true) { Assistant.setApiKey(this, it); toast("Llave guardada") }
+                    9 -> askText("Dirección de casa", "Calle, número, colonia, ciudad", CarActions.home(this)) { prefs.edit().putString("addr_home", it).apply(); toast("Casa guardada") }
+                    10 -> askText("Dirección de trabajo", "Calle, número, colonia, ciudad", CarActions.work(this)) { prefs.edit().putString("addr_work", it).apply(); toast("Trabajo guardado") }
+                    11 -> {
+                        val fast = Assistant.model(this) == Assistant.MODEL_FAST
+                        Assistant.setModel(this, if (fast) Assistant.MODEL_SMART else Assistant.MODEL_FAST)
+                        toast(if (fast) "Modelo más listo (Sonnet): un poco más lento y caro" else "Modelo rápido (Haiku)")
+                    }
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -603,6 +624,33 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun askText(title: String, hint: String, current: String, secret: Boolean = false, save: (String) -> Unit) {
+        val input = android.widget.EditText(this).apply {
+            setText(current)
+            this.hint = hint
+            isSingleLine = true
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSelection(text.length)
+        }
+        val box = FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) }
+        dialog().setTitle(title).setView(box)
+            .setPositiveButton("Guardar") { _, _ -> save(input.text.toString().trim()) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun openAssistant() {
+        startActivity(Intent(this, AssistantActivity::class.java))
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOICE_ASSIST || keyCode == KeyEvent.KEYCODE_ASSIST || keyCode == KeyEvent.KEYCODE_SEARCH) {
+            openAssistant()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun editGreeting() {
@@ -760,6 +808,9 @@ class MainActivity : Activity() {
             lastFix = SystemClock.elapsedRealtime()
             val kmh = if (l.hasSpeed()) l.speed * 3.6f else 0f
             road.speedKmh = if (kmh < 2f) 0f else kmh
+            CarState.speedKmh = road.speedKmh
+            CarState.lat = l.latitude
+            CarState.lon = l.longitude
             road.heading = if (l.hasBearing() && kmh >= 5f) "Rumbo " + compass(l.bearing) else "GPS listo"
             updateMap(l, kmh)
         }
@@ -854,6 +905,9 @@ class MainActivity : Activity() {
         val mc = controller
         val md = mc?.metadata
         musicTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: "Sin reproducción"
+        CarState.song = md?.let { m ->
+            listOfNotNull(m.getString(MediaMetadata.METADATA_KEY_TITLE), m.getString(MediaMetadata.METADATA_KEY_ARTIST)).joinToString(" - ").ifBlank { null }
+        }
         musicArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
             ?: if (mc == null) "Toca para abrir música" else appName(mc.packageName)
         val art = md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)

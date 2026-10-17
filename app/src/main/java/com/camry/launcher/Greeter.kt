@@ -79,8 +79,17 @@ object Greeter {
         pickAudio(app)?.let { file ->
             if (playFile(app, file, onError)) return
         }
-        speakTts(app, onError)
+        speakTts(app, pickPhrase(app), onError, null)
     }
+
+    /** Dice cualquier texto (lo usa el asistente). onDone se llama al terminar o fallar. */
+    fun say(ctx: Context, text: String, onError: ((String) -> Unit)? = null, onDone: (() -> Unit)? = null) {
+        val app = ctx.applicationContext
+        stop()
+        speakTts(app, text, onError, onDone)
+    }
+
+    fun shutUp() = stop()
 
     private fun playFile(ctx: Context, file: File, onError: ((String) -> Unit)?): Boolean = try {
         requestFocus(ctx)
@@ -98,14 +107,14 @@ object Greeter {
         false
     }
 
-    private fun speakTts(app: Context, onError: ((String) -> Unit)?) {
-        val phrase = pickPhrase(app)
+    private fun speakTts(app: Context, phrase: String, onError: ((String) -> Unit)?, onDone: (() -> Unit)?) {
         var engine: TextToSpeech? = null
         engine = TextToSpeech(app) { status ->
             val t = engine ?: return@TextToSpeech
             if (status != TextToSpeech.SUCCESS) {
                 onError?.invoke("El estéreo no tiene motor de voz. Instala \"Speech Services by Google\".")
                 t.shutdown()
+                onDone?.invoke()
                 return@TextToSpeech
             }
             val mx = t.setLanguage(Locale("es", "MX"))
@@ -118,17 +127,18 @@ object Greeter {
             t.setAudioAttributes(attrs)
             t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
-                override fun onDone(utteranceId: String?) { abandonFocus(app); t.shutdown(); if (tts === t) tts = null }
+                override fun onDone(utteranceId: String?) { abandonFocus(app); t.shutdown(); if (tts === t) tts = null; onDone?.invoke() }
                 @Deprecated("API antigua")
                 override fun onError(utteranceId: String?) {
                     onError?.invoke("La voz falló al hablar")
                     abandonFocus(app); t.shutdown(); if (tts === t) tts = null
+                    onDone?.invoke()
                 }
             })
             requestFocus(app)
             val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
             val r = t.speak(phrase, TextToSpeech.QUEUE_FLUSH, params, "saludo")
-            if (r != TextToSpeech.SUCCESS) onError?.invoke("La voz del sistema rechazó el saludo")
+            if (r != TextToSpeech.SUCCESS) { onError?.invoke("La voz del sistema rechazó el texto"); onDone?.invoke() }
         }
         tts = engine
     }
