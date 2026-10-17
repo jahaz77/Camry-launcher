@@ -77,8 +77,9 @@ object Greeter {
         val app = ctx.applicationContext
         stop()
         pickAudio(app)?.let { file ->
-            if (playFile(app, file, onError)) return
+            if (playFile(app, file, onError)) { EventLog.add(app, "Saludo: reproduciendo ${file.name}"); return }
         }
+        EventLog.add(app, "Saludo: usando la voz del sistema")
         speakTts(app, pickPhrase(app), onError, null)
     }
 

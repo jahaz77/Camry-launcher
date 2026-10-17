@@ -80,6 +80,9 @@ class MainActivity : Activity() {
     private var mediaManager: MediaSessionManager? = null
     private var mediaNeedsAccess = false
     private var map: MapView? = null
+    private var mapLabel: TextView? = null
+    @Volatile private var online = false
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var myMarker: Marker? = null
 
     // ---------------------------------------------------------------- ciclo de vida
@@ -96,13 +99,17 @@ class MainActivity : Activity() {
         })
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON).apply {
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
         })
         setupMedia()
+        watchNetwork()
         handler.post(ticker)
         // Primer arranque del estéreo (no al cambiar de tema)
         if (!greetedThisRun) {
             greetedThisRun = true
-            if (SystemClock.elapsedRealtime() < 5 * 60_000L) greetSoon()
+            val up = SystemClock.elapsedRealtime()
+            EventLog.add(this, "Launcher iniciado (estéreo encendido hace ${up / 1000}s)")
+            if (up < 5 * 60_000L) greetSoon("arranque del estéreo", 12_000L)
         }
     }
 
@@ -123,6 +130,7 @@ class MainActivity : Activity() {
         handler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(usbReceiver) }
         runCatching { unregisterReceiver(screenReceiver) }
+        runCatching { netCallback?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } }
         runCatching { locationManager?.removeUpdates(locationListener) }
         runCatching { mediaManager?.removeOnActiveSessionsChangedListener(sessionsListener) }
         controller?.unregisterCallback(mediaCallback)
@@ -285,7 +293,8 @@ class MainActivity : Activity() {
         }
         header.addView(View(this).apply { background = rounded(Color.rgb(52, 211, 153), 4f) }, lp(px(8f), px(8f)))
         header.addView(gap(8f))
-        header.addView(label("MAPA", 13f, skin.textDim).apply { letterSpacing = 0.08f })
+        mapLabel = label("MAPA", 13f, skin.textDim).apply { letterSpacing = 0.08f }
+        header.addView(mapLabel)
         frame.addView(header, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
 
         val bar = LinearLayout(this).apply {
@@ -327,6 +336,48 @@ class MainActivity : Activity() {
         bar.addView(buttons, lp(MATCH, WRAP))
         frame.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
         return frame
+    }
+
+    /** Al recuperar internet, el mapa vuelve a pedir los cuadros que no pudo descargar. */
+    private fun watchNetwork() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        online = runCatching { cm.activeNetwork != null }.getOrDefault(false)
+        updateMapLabel()
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                online = true
+                handler.post {
+                    EventLog.add(this@MainActivity, "Internet disponible")
+                    updateMapLabel()
+                    refreshMap()
+                }
+            }
+            override fun onLost(network: android.net.Network) {
+                online = runCatching { cm.activeNetwork != null }.getOrDefault(false)
+                handler.post { updateMapLabel() }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb); netCallback = cb }
+    }
+
+    /** Prueba si el estéreo puede descargar un cuadro del mapa. */
+    private fun tileTest(): String = runCatching {
+        val c = java.net.URL("https://a.basemaps.cartocdn.com/dark_all/3/1/3.png").openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 8000; c.readTimeout = 8000
+        c.setRequestProperty("User-Agent", packageName)
+        val code = c.responseCode
+        c.disconnect()
+        if (code == 200) "descarga OK" else "el servidor respondió $code"
+    }.getOrElse { "no se pudo conectar (${it.javaClass.simpleName}: ${it.message})" }
+
+    private fun updateMapLabel() {
+        mapLabel?.text = if (online) "MAPA" else "MAPA · SIN INTERNET"
+    }
+
+    private fun refreshMap() {
+        val mv = map ?: return
+        runCatching { mv.tileProvider.clearTileCache() }
+        mv.invalidate()
     }
 
     private fun startPoint(): GeoPoint {
@@ -567,7 +618,7 @@ class MainActivity : Activity() {
             "Cambiar el texto del saludo",
             "Probar el saludo",
             "Abrir CarPlay al conectar el iPhone: " + if (auto) "Sí" else "No",
-            "Diagnóstico de voz",
+            "Diagnóstico (voz, mapa y encendido)",
             "Agregar audios de saludo",
             "Audios de saludo guardados (" + Greeter.audioFiles().size + ")",
             "Asistente: llave de la API" + if (Assistant.apiKey(this).isBlank()) " (falta)" else " (lista)",
@@ -586,16 +637,19 @@ class MainActivity : Activity() {
                         prefs.edit().putBoolean("auto_carplay", !auto).apply()
                         toast(if (!auto) "CarPlay se abrirá al conectar el iPhone" else "Apertura automática desactivada")
                     }
-                    5 -> Greeter.diagnose(this) { info ->
+                    5 -> Thread {
+                        val tiles = tileTest()
+                        Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico de voz").setMessage(info)
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\nMAPA: " + tiles + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
                                 }
                                 .show()
                         }
-                    }
+                        }
+                    }.start()
                     6 -> pickGreetingAudios()
                     7 -> showGreetingAudios()
                     8 -> askText("Llave de la API de Claude", "sk-ant-…", Assistant.apiKey(this), secret = true) { Assistant.setApiKey(this, it); toast("Llave guardada") }
@@ -745,30 +799,70 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- saludo al encender
+    //
+    // Cada estéreo avisa el encendido de forma distinta, así que se escuchan varias señales:
+    //  - la pantalla se prende tras estar apagada más de 1 minuto
+    //  - el estéreo despierta de una suspensión (el reloj real avanza más que el tiempo activo)
+    //  - el launcher vuelve a primer plano tras más de 1 minuto oculto
+    //  - el iPhone se reconecta por Bluetooth (pasa cada vez que arrancas)
+    //  - el estéreo acaba de arrancar desde cero
+    // Solo se saluda una vez cada 10 minutos.
 
-    /** El TS18 apaga la pantalla al quitar la llave y la prende al ponerla. */
     private var screenOffAt = 0L
+    private var stoppedAt = 0L
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                Intent.ACTION_SCREEN_OFF -> screenOffAt = SystemClock.elapsedRealtime()
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOffAt = SystemClock.elapsedRealtime()
+                    EventLog.add(context, "Pantalla apagada")
+                }
                 Intent.ACTION_SCREEN_ON -> {
                     val away = SystemClock.elapsedRealtime() - screenOffAt
-                    if (screenOffAt != 0L && away > 60_000L) greetSoon()
+                    EventLog.add(context, "Pantalla encendida (apagada ${away / 1000}s)")
+                    if (screenOffAt != 0L && away > 60_000L) greetSoon("pantalla encendida", 6000L)
+                }
+                android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                    @Suppress("DEPRECATION")
+                    val dev: android.bluetooth.BluetoothDevice? = intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
+                    val name = runCatching { dev?.name }.getOrNull() ?: "dispositivo"
+                    EventLog.add(context, "Bluetooth conectado: $name")
+                    greetSoon("bluetooth $name", 5000L)
                 }
             }
         }
     }
 
-    private var lastGreet = 0L
+    override fun onStart() {
+        super.onStart()
+        val away = if (stoppedAt == 0L) 0L else SystemClock.elapsedRealtime() - stoppedAt
+        if (stoppedAt != 0L) EventLog.add(this, "Launcher visible otra vez (${away / 1000}s oculto)")
+        if (stoppedAt != 0L && away > 60_000L) greetSoon("launcher visible", 6000L)
+        stoppedAt = 0L
+    }
 
-    private fun greetSoon() {
+    override fun onStop() {
+        stoppedAt = SystemClock.elapsedRealtime()
+        super.onStop()
+    }
+
+    private fun greetSoon(reason: String, delayMs: Long) {
         if (!Greeter.isOn(this)) return
-        val now = SystemClock.elapsedRealtime()
-        if (lastGreet != 0L && now - lastGreet < 60_000L) return // no repetir
-        lastGreet = now
-        handler.postDelayed({ Greeter.speak(this) { msg -> runOnUiThread { toast(msg) } } }, 3500L)
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong("last_greet_at", 0L)
+        if (last != 0L && now - last in 0..10 * 60_000L) {
+            EventLog.add(this, "Saludo omitido ($reason): ya saludé hace ${(now - last) / 1000}s")
+            return
+        }
+        prefs.edit().putLong("last_greet_at", now).apply()
+        EventLog.add(this, "Saludo programado por: $reason")
+        handler.postDelayed({
+            Greeter.speak(this) { msg ->
+                EventLog.add(this, "Saludo falló: $msg")
+                runOnUiThread { toast(msg) }
+            }
+        }, delayMs)
     }
 
     private fun decode(path: String): Bitmap? = runCatching {
@@ -978,6 +1072,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- utilidades
 
     private var lastTickElapsed = 0L
+    private var tickCount = 0
     private var lastTickUptime = 0L
 
     private val ticker = object : Runnable {
@@ -986,7 +1081,11 @@ class MainActivity : Activity() {
             // Si al volver hubo más de un minuto dormido, es que se acaba de encender el auto.
             val e = SystemClock.elapsedRealtime()
             val u = SystemClock.uptimeMillis()
-            if (lastTickElapsed != 0L && (e - lastTickElapsed) - (u - lastTickUptime) > 60_000L) greetSoon()
+            val slept = (e - lastTickElapsed) - (u - lastTickUptime)
+            if (lastTickElapsed != 0L && slept > 60_000L) {
+                EventLog.add(this@MainActivity, "Desperté de suspensión (${slept / 1000}s dormido)")
+                greetSoon("despertar", 6000L)
+            }
             lastTickElapsed = e
             lastTickUptime = u
 
@@ -995,6 +1094,8 @@ class MainActivity : Activity() {
                 road.heading = "Buscando GPS"
             }
             updateProgress()
+            tickCount++
+            if (tickCount % 20 == 0 && online) map?.invalidate()
             handler.postDelayed(this, 1000L)
         }
     }
