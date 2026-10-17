@@ -27,11 +27,11 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
 
     var speedKmh = 0f
         set(v) {
-            if (field != v) { field = v; if (photo != null) invalidate() }
+            if (field != v) { field = v; invalidate() }
         }
     var heading = "Esperando GPS"
         set(v) {
-            if (field != v) { field = v; if (photo != null) invalidate() }
+            if (field != v) { field = v; invalidate() }
         }
 
     /** Foto del auto para los temas con centro "foto" (sin animación). */
@@ -50,6 +50,44 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
     private val roadPath = Path()
     private val car = CarPainter()
 
+    // Fondo del camino pre-dibujado (se rehace solo si cambia el tamaño): ahorra mucho CPU/GPU
+    private var scene: Bitmap? = null
+    private var fadeShader: Shader? = null
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        scene?.recycle()
+        scene = null
+        fadeShader = null
+    }
+
+    private fun buildScene(w: Float, h: Float): Bitmap {
+        val bmp = Bitmap.createBitmap(w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val s = h / 484f
+        val cx = w / 2f
+        val vpY = h * 0.31f
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        c.drawColor(skin.road)
+        p.shader = RadialGradient(cx, vpY, w * 0.55f, intArrayOf(alpha(skin.accent, 90), alpha(skin.accent, 0)), null, Shader.TileMode.CLAMP)
+        c.save(); c.scale(1f, 0.28f, cx, vpY); c.drawCircle(cx, vpY, w * 0.55f, p); c.restore()
+        val topHalf = 8f * s
+        val botHalf = 266f * s
+        val path = Path().apply {
+            moveTo(cx - topHalf, vpY); lineTo(cx + topHalf, vpY); lineTo(cx + botHalf, h); lineTo(cx - botHalf, h); close()
+        }
+        p.shader = LinearGradient(0f, vpY, 0f, h, skin.road, mix(skin.road, Color.WHITE, 0.08f), Shader.TileMode.CLAMP)
+        c.drawPath(path, p)
+        p.shader = null
+        p.style = Paint.Style.STROKE
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeWidth = 2.5f * s
+        p.color = alpha(skin.accent, 230)
+        c.drawLine(cx - topHalf, vpY, cx - botHalf, h, p)
+        c.drawLine(cx + topHalf, vpY, cx + botHalf, h, p)
+        return bmp
+    }
+
     override fun onDraw(c: Canvas) {
         photo?.let { drawPhotoMode(c, it); return }
         val now = SystemClock.uptimeMillis()
@@ -65,39 +103,8 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         val cx = w / 2f
         val vpY = h * 0.31f
 
-        c.drawColor(skin.road)
-
-        // Resplandor en el horizonte
-        paint.style = Paint.Style.FILL
-        paint.shader = RadialGradient(
-            cx, vpY, w * 0.55f,
-            intArrayOf(alpha(skin.accent, 90), alpha(skin.accent, 0)), null, Shader.TileMode.CLAMP
-        )
-        c.save()
-        c.scale(1f, 0.28f, cx, vpY)
-        c.drawCircle(cx, vpY, w * 0.55f, paint)
-        c.restore()
-
-        // Asfalto
-        val topHalf = 8f * s
-        val botHalf = 266f * s
-        roadPath.reset()
-        roadPath.moveTo(cx - topHalf, vpY)
-        roadPath.lineTo(cx + topHalf, vpY)
-        roadPath.lineTo(cx + botHalf, h)
-        roadPath.lineTo(cx - botHalf, h)
-        roadPath.close()
-        paint.shader = LinearGradient(0f, vpY, 0f, h, skin.road, mix(skin.road, Color.WHITE, 0.08f), Shader.TileMode.CLAMP)
-        c.drawPath(roadPath, paint)
-        paint.shader = null
-
-        // Orillas iluminadas
-        paint.style = Paint.Style.STROKE
-        paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = 2.5f * s
-        paint.color = alpha(skin.accent, 230)
-        c.drawLine(cx - topHalf, vpY, cx - botHalf, h, paint)
-        c.drawLine(cx + topHalf, vpY, cx + botHalf, h, paint)
+        val bg = scene ?: buildScene(w, h).also { scene = it }
+        c.drawBitmap(bg, 0f, 0f, null)
 
         // Líneas de carril (avanzan con la velocidad)
         paint.strokeCap = Paint.Cap.BUTT
@@ -110,10 +117,10 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         // Desvanecido hacia el horizonte
         paint.style = Paint.Style.FILL
         val fadeTop = vpY - 10f * s
-        paint.shader = LinearGradient(
+        paint.shader = fadeShader ?: LinearGradient(
             0f, fadeTop, 0f, fadeTop + (h - fadeTop) * 0.45f,
             skin.road, alpha(skin.road, 0), Shader.TileMode.CLAMP
-        )
+        ).also { fadeShader = it }
         c.drawRect(0f, fadeTop, w, h, paint)
         paint.shader = null
 
@@ -143,7 +150,8 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
             c.restore()
         }
 
-        if (isShown) postInvalidateOnAnimation()
+        // Solo se anima mientras avanzas, y a 30 cuadros por segundo (suficiente y mucho más fresco)
+        if (moving && isShown) postInvalidateDelayed(33L)
     }
 
     /** Tema "foto": la foto real del auto, quieta, con el velocímetro encima. */
@@ -234,7 +242,7 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         lastFrame = 0L
-        postInvalidateOnAnimation()
+        invalidate()
     }
 
     companion object {
