@@ -841,6 +841,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        visible = true
         val away = if (stoppedAt == 0L) 0L else SystemClock.elapsedRealtime() - stoppedAt
         if (stoppedAt != 0L) EventLog.add(this, "Launcher visible otra vez (${away / 1000}s oculto)")
         if (stoppedAt != 0L && away > 60_000L) WakeLogic.carStarted(this, "launcher visible", goHome = false)
@@ -848,6 +849,7 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        visible = false
         stoppedAt = SystemClock.elapsedRealtime()
         super.onStop()
     }
@@ -1163,6 +1165,7 @@ class MainActivity : Activity() {
     companion object {
         private const val APPLE_VENDOR_ID = 0x05AC
         private var greetedThisRun = false
+        @Volatile var visible = false
         private const val REQ_AUDIO = 7
     }
 }

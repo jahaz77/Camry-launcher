@@ -31,6 +31,9 @@ class CarService : Service() {
     private var screenOffAt = 0L
     private var lastElapsed = 0L
     private var lastUptime = 0L
+    private var ticks = 0
+
+    private fun markAlive() = ThemeManager.prefs(this).edit().putLong("alive_at", System.currentTimeMillis()).apply()
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -75,6 +78,7 @@ class CarService : Service() {
             }
             lastElapsed = e
             lastUptime = u
+            if (++ticks % 3 == 0) markAlive()
             handler.postDelayed(this, 3000L)
         }
     }
@@ -89,8 +93,16 @@ class CarService : Service() {
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         })
         val up = SystemClock.elapsedRealtime()
-        EventLog.add(this, "Servicio iniciado (estéreo encendido hace ${up / 1000}s)")
-        if (up < 5 * 60_000L) WakeLogic.carStarted(this, "arranque del estéreo", goHome = true, greetDelay = 12_000L)
+        // Tu estéreo cierra todas las apps al quitar la llave: si llevábamos más de 1 minuto
+        // sin estar vivos, este arranque ES el encendido del auto.
+        val lastAlive = ThemeManager.prefs(this).getLong("alive_at", 0L)
+        val off = if (lastAlive == 0L) -1L else (System.currentTimeMillis() - lastAlive) / 1000
+        EventLog.add(this, "Servicio iniciado (inactivo ${off}s, estéreo encendido hace ${up / 1000}s)")
+        markAlive()
+        when {
+            up < 5 * 60_000L -> WakeLogic.carStarted(this, "arranque del estéreo", goHome = true, greetDelay = 12_000L)
+            off > 60 -> WakeLogic.carStarted(this, "encendido (estuve cerrado ${off}s)", goHome = true, greetDelay = 7000L)
+        }
         handler.post(ticker)
     }
 
@@ -154,18 +166,29 @@ object WakeLogic {
         if (prefs.getBoolean("wake_music", true)) handler.postDelayed({ resumeMusic(app) }, greetDelay + 6000L)
     }
 
+    /**
+     * Pone el launcher al frente. El estéreo abre su app de Bluetooth unos segundos después
+     * de encender, así que se vuelve a intentar durante los primeros ~20 segundos.
+     */
     private fun goHome(ctx: Context, reason: String) {
         if (!Settings.canDrawOverlays(ctx)) {
             EventLog.add(ctx, "No puedo volver al inicio: falta el permiso \"Mostrar sobre otras apps\"")
-            return
         }
-        val ok = runCatching {
-            ctx.startActivity(
-                Intent(ctx, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            ); true
-        }.getOrDefault(false)
-        EventLog.add(ctx, "Volver al inicio ($reason): " + if (ok) "listo" else "falló")
+        var tries = 0
+        for (delay in longArrayOf(500L, 3000L, 6000L, 10_000L, 15_000L, 21_000L)) {
+            handler.postDelayed({
+                if (!MainActivity.visible) {
+                    tries++
+                    val ok = runCatching {
+                        ctx.startActivity(
+                            Intent(ctx, MainActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        ); true
+                    }.getOrDefault(false)
+                    EventLog.add(ctx, "Volver al inicio ($reason) intento $tries: " + if (ok) "pedido" else "falló")
+                }
+            }, delay)
+        }
     }
 
     private fun greet(ctx: Context, reason: String, delay: Long) {
