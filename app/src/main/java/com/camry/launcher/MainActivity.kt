@@ -97,10 +97,8 @@ class MainActivity : Activity() {
         registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED).apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         })
-        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON).apply {
-            addAction(Intent.ACTION_SCREEN_OFF)
-            addAction(android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED)
-        })
+        // El encendido lo vigila CarService (sigue vivo aunque Android cierre esta pantalla)
+        CarService.start(this)
         setupMedia()
         watchNetwork()
         handler.post(ticker)
@@ -109,7 +107,7 @@ class MainActivity : Activity() {
             greetedThisRun = true
             val up = SystemClock.elapsedRealtime()
             EventLog.add(this, "Launcher iniciado (estéreo encendido hace ${up / 1000}s)")
-            if (up < 5 * 60_000L) { greetSoon("arranque del estéreo", 12_000L); resumeMusicSoon(18_000L) }
+            // el saludo de arranque lo hace CarService
         }
     }
 
@@ -845,7 +843,7 @@ class MainActivity : Activity() {
         super.onStart()
         val away = if (stoppedAt == 0L) 0L else SystemClock.elapsedRealtime() - stoppedAt
         if (stoppedAt != 0L) EventLog.add(this, "Launcher visible otra vez (${away / 1000}s oculto)")
-        if (stoppedAt != 0L && away > 60_000L) greetSoon("launcher visible", 6000L)
+        if (stoppedAt != 0L && away > 60_000L) WakeLogic.carStarted(this, "launcher visible", goHome = false)
         stoppedAt = 0L
     }
 
@@ -1145,10 +1143,7 @@ class MainActivity : Activity() {
             val e = SystemClock.elapsedRealtime()
             val u = SystemClock.uptimeMillis()
             val slept = (e - lastTickElapsed) - (u - lastTickUptime)
-            if (lastTickElapsed != 0L && slept > 60_000L) {
-                EventLog.add(this@MainActivity, "Desperté de suspensión (${slept / 1000}s dormido)")
-                onCarStarted("despertar")
-            }
+            // (la detección de encendido la hace CarService)
             lastTickElapsed = e
             lastTickUptime = u
 
