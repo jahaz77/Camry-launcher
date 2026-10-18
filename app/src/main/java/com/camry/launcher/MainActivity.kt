@@ -109,7 +109,7 @@ class MainActivity : Activity() {
             greetedThisRun = true
             val up = SystemClock.elapsedRealtime()
             EventLog.add(this, "Launcher iniciado (estéreo encendido hace ${up / 1000}s)")
-            if (up < 5 * 60_000L) greetSoon("arranque del estéreo", 12_000L)
+            if (up < 5 * 60_000L) { greetSoon("arranque del estéreo", 12_000L); resumeMusicSoon(18_000L) }
         }
     }
 
@@ -624,7 +624,10 @@ class MainActivity : Activity() {
             "Asistente: llave de la API" + if (Assistant.apiKey(this).isBlank()) " (falta)" else " (lista)",
             "Asistente: dirección de casa",
             "Asistente: dirección de trabajo",
-            "Asistente: modelo (" + (if (Assistant.model(this) == Assistant.MODEL_FAST) "rápido" else "más listo") + ")"
+            "Asistente: modelo (" + (if (Assistant.model(this) == Assistant.MODEL_FAST) "rápido" else "más listo") + ")",
+            "Al encender, volver a esta pantalla: " + if (prefs.getBoolean("wake_home", true)) "Sí" else "No",
+            "Al encender, reanudar la música: " + if (prefs.getBoolean("wake_music", true)) "Sí" else "No",
+            "Permiso para volver a esta pantalla" + if (canGoHomeFromBackground()) " (listo)" else " (falta)"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -660,6 +663,9 @@ class MainActivity : Activity() {
                         Assistant.setModel(this, if (fast) Assistant.MODEL_SMART else Assistant.MODEL_FAST)
                         toast(if (fast) "Modelo más listo (Sonnet): un poco más lento y caro" else "Modelo rápido (Haiku)")
                     }
+                    12 -> togglePref("wake_home", "Al encender volverá a esta pantalla", "Al encender se queda la última app")
+                    13 -> togglePref("wake_music", "Al encender se reanuda la música", "Al encender la música queda en pausa")
+                    14 -> askOverlayPermission()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -821,7 +827,7 @@ class MainActivity : Activity() {
                 Intent.ACTION_SCREEN_ON -> {
                     val away = SystemClock.elapsedRealtime() - screenOffAt
                     EventLog.add(context, "Pantalla encendida (apagada ${away / 1000}s)")
-                    if (screenOffAt != 0L && away > 60_000L) greetSoon("pantalla encendida", 6000L)
+                    if (screenOffAt != 0L && away > 60_000L) onCarStarted("pantalla encendida")
                 }
                 android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED -> {
                     @Suppress("DEPRECATION")
@@ -829,6 +835,7 @@ class MainActivity : Activity() {
                     val name = runCatching { dev?.name }.getOrNull() ?: "dispositivo"
                     EventLog.add(context, "Bluetooth conectado: $name")
                     greetSoon("bluetooth $name", 5000L)
+                    resumeMusicSoon(12_000L)
                 }
             }
         }
@@ -845,6 +852,54 @@ class MainActivity : Activity() {
     override fun onStop() {
         stoppedAt = SystemClock.elapsedRealtime()
         super.onStop()
+    }
+
+    private var lastStartHandled = 0L
+
+    /** Se acaba de encender el auto: volver al inicio, saludar y reanudar la música. */
+    private fun onCarStarted(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (lastStartHandled != 0L && now - lastStartHandled < 30_000L) return
+        lastStartHandled = now
+        if (prefs.getBoolean("wake_home", true)) goHome(reason)
+        greetSoon(reason, 6000L)
+        resumeMusicSoon(12_000L)
+    }
+
+    private fun goHome(reason: String) {
+        if (stoppedAt == 0L) return // ya estamos en pantalla
+        val i = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        val ok = runCatching { startActivity(i); true }.getOrDefault(false)
+        EventLog.add(this, "Volver al inicio ($reason): " + if (ok) "pedido" else "falló")
+        handler.postDelayed({
+            if (stoppedAt != 0L) EventLog.add(this, "No pude volver al inicio: activa el permiso en Opciones")
+        }, 2500L)
+    }
+
+    private fun resumeMusicSoon(delayMs: Long) {
+        if (!prefs.getBoolean("wake_music", true)) return
+        handler.postDelayed({
+            val mc = controller
+            if (mc?.playbackState?.state == PlaybackState.STATE_PLAYING) return@postDelayed
+            if (mc != null) mc.transportControls.play() else mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            EventLog.add(this, "Música reanudada" + (mc?.packageName?.let { " ($it)" } ?: " (tecla play)"))
+        }, delayMs)
+    }
+
+    private fun togglePref(key: String, onMsg: String, offMsg: String) {
+        val v = !prefs.getBoolean(key, true)
+        prefs.edit().putBoolean(key, v).apply()
+        toast(if (v) onMsg else offMsg)
+    }
+
+    /** Android solo deja traer el launcher al frente desde segundo plano con el permiso "mostrar sobre otras apps". */
+    private fun canGoHomeFromBackground() = Settings.canDrawOverlays(this)
+
+    private fun askOverlayPermission() {
+        if (canGoHomeFromBackground()) { toast("El permiso ya está activo"); return }
+        toast("Activa \"Camry Launcher\" en la lista para que vuelva al inicio al encender")
+        AppUtils.start(this, Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
     }
 
     private fun greetSoon(reason: String, delayMs: Long) {
@@ -890,6 +945,14 @@ class MainActivity : Activity() {
     }
 
     private fun onPermissionsReady() {
+        if (!canGoHomeFromBackground() && !prefs.getBoolean("asked_overlay", false)) {
+            prefs.edit().putBoolean("asked_overlay", true).apply()
+            dialog().setTitle("Volver al inicio al encender")
+                .setMessage("Para que al encender el auto se muestre esta pantalla (y no la última app que dejaste abierta), Android necesita el permiso \"Mostrar sobre otras apps\".")
+                .setPositiveButton("Activar") { _, _ -> askOverlayPermission() }
+                .setNegativeButton("Ahora no", null)
+                .show()
+        }
         if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
             ThemeManager.ensureUserDir(this)
             runCatching { Greeter.greetingsDir().mkdirs() }
@@ -1084,7 +1147,7 @@ class MainActivity : Activity() {
             val slept = (e - lastTickElapsed) - (u - lastTickUptime)
             if (lastTickElapsed != 0L && slept > 60_000L) {
                 EventLog.add(this@MainActivity, "Desperté de suspensión (${slept / 1000}s dormido)")
-                greetSoon("despertar", 6000L)
+                onCarStarted("despertar")
             }
             lastTickElapsed = e
             lastTickUptime = u
