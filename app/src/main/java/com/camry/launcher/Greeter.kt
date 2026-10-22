@@ -18,7 +18,7 @@ import java.util.Locale
  * 2) Si no, dice una de las frases (una por línea) con la voz del sistema.
  */
 object Greeter {
-    const val DEFAULT_TEXT = "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?"
+    const val DEFAULT_TEXT = "{saludo}, Diana y Jahaz, ¿a dónde vamos hoy?"
     private const val KEY_ON = "greet_on"
     private const val KEY_TEXT = "greet_text"
 
@@ -34,7 +34,8 @@ object Greeter {
 
     fun isOn(ctx: Context) = ThemeManager.prefs(ctx).getBoolean(KEY_ON, true)
     fun setOn(ctx: Context, on: Boolean) = ThemeManager.prefs(ctx).edit().putBoolean(KEY_ON, on).apply()
-    fun text(ctx: Context): String = ThemeManager.prefs(ctx).getString(KEY_TEXT, null) ?: DEFAULT_TEXT
+    fun text(ctx: Context): String = ThemeManager.prefs(ctx).getString(KEY_TEXT, null)
+        ?.takeIf { it != "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?" } ?: DEFAULT_TEXT
     fun setText(ctx: Context, t: String) = ThemeManager.prefs(ctx).edit().putString(KEY_TEXT, t).apply()
 
     private val AUDIO_EXT = setOf("mp3", "m4a", "wav", "ogg", "aac", "flac")
@@ -42,35 +43,72 @@ object Greeter {
     fun baseDir(): File = File(Environment.getExternalStorageDirectory(), "CamryLauncher")
     fun greetingsDir(): File = File(baseDir(), "saludos")
 
-    /** Todos los audios de saludo: la carpeta CamryLauncher/saludos y el saludo.mp3 de antes. */
-    fun audioFiles(): List<File> {
-        val inFolder = greetingsDir().listFiles()?.filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
-        val legacy = baseDir().listFiles()?.filter { it.isFile && it.nameWithoutExtension.lowercase() == "saludo" && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
-        return (inFolder + legacy).sortedBy { it.name }
+    /** Horarios: mañana 5:00–11:59, tarde 12:00–18:59, noche 19:00–4:59. */
+    enum class Slot(val folder: String, val label: String, val hello: String) {
+        MANANA("manana", "Mañana", "Buenos días"),
+        TARDE("tarde", "Tarde", "Buenas tardes"),
+        NOCHE("noche", "Noche", "Buenas noches");
+
+        companion object {
+            fun now(): Slot {
+                val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                return when (h) { in 5..11 -> MANANA; in 12..18 -> TARDE; else -> NOCHE }
+            }
+        }
     }
 
-    /** Elige uno al azar, sin repetir el último que sonó. */
+    private fun audiosIn(dir: File): List<File> =
+        dir.listFiles()?.filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
+
+    /** Audios para cualquier hora: CamryLauncher/saludos (y el saludo.mp3 de antes). */
+    fun anytimeAudios(): List<File> {
+        val legacy = baseDir().listFiles()?.filter { it.isFile && it.nameWithoutExtension.lowercase() == "saludo" && it.extension.lowercase() in AUDIO_EXT }.orEmpty()
+        return (audiosIn(greetingsDir()) + legacy).sortedBy { it.name }
+    }
+
+    fun slotAudios(slot: Slot): List<File> = audiosIn(File(greetingsDir(), slot.folder)).sortedBy { it.name }
+
+    /** Todos los audios, para la lista en Opciones. */
+    fun audioFiles(): List<File> = anytimeAudios() + Slot.values().flatMap { slotAudios(it) }
+
+    /** Etiqueta de horario de un audio. */
+    fun slotLabel(f: File): String = Slot.values().firstOrNull { f.parentFile?.name == it.folder }?.label ?: "Cualquier hora"
+
+    /** Elige al azar entre los de este horario y los de cualquier hora, sin repetir el último. */
     private fun pickAudio(ctx: Context): File? {
-        val all = audioFiles()
+        val all = slotAudios(Slot.now()) + anytimeAudios()
         if (all.isEmpty()) return null
         val prefs = ThemeManager.prefs(ctx)
         val last = prefs.getString("greet_last", null)
-        val pool = if (all.size > 1) all.filter { it.name != last } else all
+        val pool = if (all.size > 1) all.filter { it.absolutePath != last } else all
         val f = pool.random()
-        prefs.edit().putString("greet_last", f.name).apply()
+        prefs.edit().putString("greet_last", f.absolutePath).apply()
         return f
     }
 
-    /** Frases para la voz del sistema: una por línea, se elige una al azar. */
+    /**
+     * Frases para la voz del sistema, una por línea. Se pueden marcar con "mañana:", "tarde:" o "noche:"
+     * al inicio para que solo salgan en ese horario; sin marca salen a cualquier hora.
+     * {saludo} se cambia por "Buenos días", "Buenas tardes" o "Buenas noches".
+     */
     private fun pickPhrase(ctx: Context): String {
-        val lines = text(ctx).split('\n').map { it.trim() }.filter { it.isNotEmpty() }
-        if (lines.isEmpty()) return DEFAULT_TEXT
+        val slot = Slot.now()
+        val tags = mapOf("manana" to Slot.MANANA, "tarde" to Slot.TARDE, "noche" to Slot.NOCHE)
+        val lines = text(ctx).split('\n').map { it.trim() }.filter { it.isNotEmpty() }.mapNotNull { line ->
+            val colon = line.indexOf(':')
+            val tag = if (colon in 1..8) tags[AppUtils.normalize(line.substring(0, colon).trim())] else null
+            when {
+                tag == null -> line
+                tag == slot -> line.substring(colon + 1).trim()
+                else -> null
+            }
+        }.filter { it.isNotEmpty() }
         val prefs = ThemeManager.prefs(ctx)
         val last = prefs.getString("greet_last_text", null)
         val pool = if (lines.size > 1) lines.filter { it != last } else lines
-        val p = pool.random()
+        val p = pool.randomOrNull() ?: DEFAULT_TEXT
         prefs.edit().putString("greet_last_text", p).apply()
-        return p
+        return p.replace("{saludo}", slot.hello)
     }
 
     fun speak(ctx: Context, onError: ((String) -> Unit)? = null) {
@@ -149,7 +187,7 @@ object Greeter {
         val app = ctx.applicationContext
         val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val sb = StringBuilder()
-        sb.append("Audios de saludo: ").append(audioFiles().size).append('\n')
+        sb.append("Horario actual: ").append(Slot.now().label).append('\n').append("Audios de saludo: ").append(audioFiles().size).append('\n')
         sb.append("Volumen media: ").append(am.getStreamVolume(AudioManager.STREAM_MUSIC))
             .append('/').append(am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)).append('\n')
         var engine: TextToSpeech? = null

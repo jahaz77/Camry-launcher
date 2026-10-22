@@ -719,7 +719,8 @@ class MainActivity : Activity() {
             setSelection(text.length)
         }
         val box = FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) }
-        dialog().setTitle("Frases del saludo (una por línea, sale una al azar)")
+        dialog().setTitle("Frases del saludo")
+            .setMessage("Una por línea; sale una al azar.\n• {saludo} = Buenos días / Buenas tardes / Buenas noches\n• Empieza con \"mañana:\", \"tarde:\" o \"noche:\" para que salga solo a esa hora.")
             .setView(box)
             .setPositiveButton("Guardar") { _, _ ->
                 val t = input.text.toString().trim()
@@ -731,7 +732,27 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** Carpeta destino del próximo "Agregar audios": null = cualquier hora. */
+    private var pendingSlot: Greeter.Slot? = null
+
     private fun pickGreetingAudios() {
+        val names = arrayOf("Cualquier hora") + Greeter.Slot.values().map {
+            it.label + when (it) {
+                Greeter.Slot.MANANA -> " (5:00 a 11:59)"
+                Greeter.Slot.TARDE -> " (12:00 a 18:59)"
+                Greeter.Slot.NOCHE -> " (19:00 a 4:59)"
+            }
+        }
+        dialog().setTitle("¿Para qué horario son estos audios?")
+            .setItems(names) { _, which ->
+                pendingSlot = if (which == 0) null else Greeter.Slot.values()[which - 1]
+                openAudioPicker()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun openAudioPicker() {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("audio/*")
@@ -740,7 +761,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(i, REQ_AUDIO)
         } catch (e: Exception) {
-            toast("Copia tus audios a la carpeta CamryLauncher/saludos con el administrador de archivos")
+            toast("Copia tus audios a CamryLauncher/saludos (o a sus carpetas manana, tarde y noche)")
         }
     }
 
@@ -752,7 +773,7 @@ class MainActivity : Activity() {
         val uris = mutableListOf<Uri>()
         data.clipData?.let { cd -> for (k in 0 until cd.itemCount) uris.add(cd.getItemAt(k).uri) }
         if (uris.isEmpty()) data.data?.let { uris.add(it) }
-        val dir = Greeter.greetingsDir().apply { mkdirs() }
+        val dir = (pendingSlot?.let { File(Greeter.greetingsDir(), it.folder) } ?: Greeter.greetingsDir()).apply { mkdirs() }
         var ok = 0
         for (u in uris) {
             runCatching {
@@ -765,7 +786,8 @@ class MainActivity : Activity() {
                 ok++
             }
         }
-        toast(if (ok > 0) "Listo: $ok audio(s) agregados. Saldrá uno al azar." else "No pude copiar los audios")
+        val where = pendingSlot?.label?.lowercase()?.let { "para la $it" } ?: "para cualquier hora"
+        toast(if (ok > 0) "Listo: $ok audio(s) $where. Saldrá uno al azar." else "No pude copiar los audios")
     }
 
     private fun showGreetingAudios() {
@@ -775,10 +797,10 @@ class MainActivity : Activity() {
             return
         }
         dialog().setTitle("Toca uno para escucharlo")
-            .setItems(files.map { it.name }.toTypedArray()) { _, which -> playPreview(files[which]) }
+            .setItems(files.map { "[" + Greeter.slotLabel(it) + "]  " + it.name }.toTypedArray()) { _, which -> playPreview(files[which]) }
             .setNeutralButton("Borrar uno") { _, _ ->
                 dialog().setTitle("¿Cuál borro?")
-                    .setItems(files.map { it.name }.toTypedArray()) { _, w ->
+                    .setItems(files.map { "[" + Greeter.slotLabel(it) + "]  " + it.name }.toTypedArray()) { _, w ->
                         toast(if (files[w].delete()) "Borrado: ${files[w].name}" else "No se pudo borrar")
                     }
                     .setNegativeButton("Cancelar", null).show()
@@ -955,7 +977,10 @@ class MainActivity : Activity() {
         }
         if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
             ThemeManager.ensureUserDir(this)
-            runCatching { Greeter.greetingsDir().mkdirs() }
+            runCatching {
+                Greeter.greetingsDir().mkdirs()
+                Greeter.Slot.values().forEach { File(Greeter.greetingsDir(), it.folder).mkdirs() }
+            }
         }
         startLocation()
     }

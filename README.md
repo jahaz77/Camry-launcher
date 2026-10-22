@@ -13,6 +13,8 @@ Pantalla de inicio para el estéreo Android TS18 (1024×600) del Camry 2008.
 - **Saludo de voz** al encender: "Bienvenidos Diana y Jahaz, ¿a dónde vamos hoy?" (el texto se puede cambiar en Opciones).
   **Varios saludos al azar:** pon tus audios (mp3, m4a, wav…) en `CamryLauncher/saludos` o usa Opciones → *Agregar audios de saludo*.
   Cada vez que enciendes suena uno distinto. Sin audios, la voz del sistema dice una de tus frases (una por línea).
+  **Por horario:** audios en `saludos/manana` (5–12 h), `saludos/tarde` (12–19 h) y `saludos/noche` (19–5 h); los de `saludos/` suenan a cualquier hora.
+  En las frases, `{saludo}` dice Buenos días/tardes/noches y las líneas que empiezan con `mañana:`, `tarde:` o `noche:` solo salen a esa hora.
 - **Asistente de voz con Claude**: botón del micrófono (o el botón de voz del volante). Platica, responde dudas y
   hace cosas: "llévame a casa", "siguiente canción", "abre CarPlay", "cambia al tema oscuro".
   Necesita internet, el reconocimiento de voz de Google y una llave de la API de Claude (Opciones → Asistente).
