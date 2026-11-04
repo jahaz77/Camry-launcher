@@ -15,6 +15,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.hardware.usb.UsbDevice
@@ -99,6 +100,8 @@ class MainActivity : Activity() {
         })
         // El encendido lo vigila CarService (sigue vivo aunque Android cierre esta pantalla)
         CarService.start(this)
+        Obd.start(this)
+        Obd.listen(obdListener)
         setupMedia()
         watchNetwork()
         handler.post(ticker)
@@ -128,6 +131,7 @@ class MainActivity : Activity() {
         handler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(usbReceiver) }
         runCatching { unregisterReceiver(screenReceiver) }
+        Obd.unlisten(obdListener)
         runCatching { netCallback?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } }
         runCatching { locationManager?.removeUpdates(locationListener) }
         runCatching { mediaManager?.removeOnActiveSessionsChangedListener(sessionsListener) }
@@ -136,7 +140,7 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Launcher: el botón atrás no hace nada aquí")
-    override fun onBackPressed() { /* es la pantalla de inicio */ }
+    override fun onBackPressed() { if (panelOpen) closePanel() /* si no, es la pantalla de inicio */ }
 
     // ---------------------------------------------------------------- interfaz
 
@@ -170,9 +174,26 @@ class MainActivity : Activity() {
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = rounded(skin.card, 20f, stroke = true)
+        background = Style.glass(skin, 24f * s)
         setPadding(px(20f), px(18f), px(20f), px(18f))
     }
+
+    /** Botón principal con degradado del acento y brillo de color. */
+    private fun accentButton(radius: Float): Drawable = RippleDrawable(
+        ColorStateList.valueOf(Color.argb(60, 255, 255, 255)), Style.accentFill(skin, radius * s), null
+    )
+
+    /** Botón secundario de vidrio. */
+    private fun glassButton(radius: Float): Drawable = RippleDrawable(
+        ColorStateList.valueOf(if (skin.isLight) Color.argb(40, 0, 0, 0) else Color.argb(40, 255, 255, 255)),
+        GradientDrawable().apply {
+            cornerRadius = radius * s
+            setColor(if (skin.isLight) Color.argb(14, 0, 0, 0) else Color.argb(14, 255, 255, 255))
+            setStroke(1, if (skin.isLight) Color.argb(22, 0, 0, 0) else Color.argb(20, 255, 255, 255))
+        }, null
+    )
+
+    private fun overline(str: String) = label(str, 11f, skin.textDim).apply { letterSpacing = 0.16f }
 
     private fun lp(w: Int, h: Int, weight: Float = 0f) = LinearLayout.LayoutParams(w, h, weight)
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
@@ -181,9 +202,13 @@ class MainActivity : Activity() {
     private fun gap(v: Float) = View(this).apply { layoutParams = lp(px(v), px(v)) }
     private fun spacer() = View(this).apply { layoutParams = lp(0, 0, 1f) }
 
+    private lateinit var homePage: View
+    private lateinit var panel: VehiclePanel
+    private var panelOpen = false
+
     private fun buildUi(): View {
         val root = FrameLayout(this)
-        root.setBackgroundColor(skin.background)
+        root.background = AmbientDrawable(skin)
         skin.backgroundImage?.let { path ->
             decode(path)?.let { bmp ->
                 root.addView(ImageView(this).apply {
@@ -195,31 +220,111 @@ class MainActivity : Activity() {
 
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(px(16f), px(16f), px(16f), px(16f))
+            setPadding(px(16f), px(16f), px(16f), px(14f))
         }
+        homePage = column
         root.addView(column, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         column.addView(row, lp(MATCH, 0, 1f))
-        column.addView(gap(12f))
-        column.addView(buildDock(), lp(MATCH, px(76f)))
+        column.addView(gap(14f))
+        column.addView(buildDock(), LinearLayout.LayoutParams(MATCH, px(74f)).apply { setMargins(px(40f), 0, px(40f), 0) })
 
-        row.addView(buildMapCard(), lp(px(280f), MATCH))
-        row.addView(gap(12f))
+        row.addView(buildMapCard(), lp(px(270f), MATCH))
+        row.addView(gap(14f))
+        val center = FrameLayout(this)
         road = RoadView(this, skin).apply {
-            outlineProvider = roundOutline(20f)
-            clipToOutline = true
             setOnLongClickListener { showOptions(); true }
         }
-        row.addView(road, lp(0, MATCH, 1f))
-        row.addView(gap(12f))
+        center.addView(road, FrameLayout.LayoutParams(MATCH, MATCH))
+        // pestaña para abrir el panel del vehículo
+        val tab = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadii = floatArrayOf(11f * s, 11f * s, 0f, 0f, 0f, 0f, 11f * s, 11f * s)
+                setColor(Color.argb(15, 255, 255, 255))
+                setStroke(1, Color.argb(20, 255, 255, 255))
+            }
+            contentDescription = "Abrir panel del vehículo"
+            setOnClickListener { openPanel() }
+        }
+        tab.addView(icon(R.drawable.ic_back, 14f, skin.textDim), FrameLayout.LayoutParams(px(14f), px(14f), Gravity.CENTER))
+        center.addView(tab, FrameLayout.LayoutParams(px(22f), px(84f), Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = -px(8f) })
+        row.addView(center, lp(0, MATCH, 1f))
+        row.addView(gap(14f))
 
         val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         right.addView(buildClockCard(), lp(MATCH, WRAP))
-        right.addView(gap(12f))
+        right.addView(gap(14f))
         right.addView(buildMusicCard(), lp(MATCH, 0, 1f))
-        row.addView(right, lp(px(280f), MATCH))
+        row.addView(right, lp(px(270f), MATCH))
+
+        // panel del vehículo, fuera de la pantalla a la derecha
+        panel = VehiclePanel(this, skin, s) { closePanel() }
+        val pv = panel.view
+        root.addView(pv, FrameLayout.LayoutParams(MATCH, MATCH))
+        pv.visibility = View.INVISIBLE
+        root.post { pv.translationX = root.width.toFloat() }
         return root
+    }
+
+    // ---------------------------------------------------------------- panel deslizable
+
+    private val obdListener: (Obd.Snapshot) -> Unit = { snap -> handler.post { panel.update(snap); road.invalidate() } }
+
+    fun openPanel() {
+        if (panelOpen) return
+        panelOpen = true
+        val pv = panel.view
+        val w = (pv.parent as View).width.toFloat()
+        pv.translationX = w
+        pv.visibility = View.VISIBLE
+        pv.animate().translationX(0f).setDuration(260).start()
+        homePage.animate().translationX(-w * 0.25f).alpha(0.3f).setDuration(260).start()
+        panel.update(Obd.snap)
+    }
+
+    fun closePanel() {
+        if (!panelOpen) return
+        panelOpen = false
+        val pv = panel.view
+        val w = (pv.parent as View).width.toFloat()
+        pv.animate().translationX(w).setDuration(240).withEndAction { if (!panelOpen) pv.visibility = View.INVISIBLE }.start()
+        homePage.animate().translationX(0f).alpha(1f).setDuration(240).start()
+    }
+
+    private val swipe by lazy {
+        android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: android.view.MotionEvent?, e2: android.view.MotionEvent, vx: Float, vy: Float): Boolean {
+                if (kotlin.math.abs(vx) < 1200f || kotlin.math.abs(vx) < kotlin.math.abs(vy) * 1.5f) return false
+                if (vx < 0 && !panelOpen) { openPanel(); return true }
+                if (vx > 0 && panelOpen) { closePanel(); return true }
+                return false
+            }
+        })
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        runCatching { swipe.onTouchEvent(ev) }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /** Elegir el adaptador OBD2 entre los dispositivos Bluetooth emparejados. */
+    fun chooseObdAdapter() {
+        val devs = Obd.bonded()
+        if (devs.isEmpty()) {
+            toast("Primero empareja el adaptador OBD2 en los ajustes de Bluetooth (PIN 1234 o 0000)")
+            return
+        }
+        val current = Obd.address(this)
+        val names = devs.map { (it.name ?: "Sin nombre") + if (it.address == current) "  ✓" else "" }.toTypedArray()
+        dialog().setTitle("Adaptador OBD2")
+            .setItems(names) { _, which ->
+                Obd.setAddress(this, devs[which].address)
+                toast("Conectando a ${devs[which].name}…")
+            }
+            .setNeutralButton("Ninguno") { _, _ -> Obd.setAddress(this, null) }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun roundOutline(r: Float) = object : ViewOutlineProvider() {
@@ -231,8 +336,8 @@ class MainActivity : Activity() {
     /** Mapa de la ciudad (OpenStreetMap + CARTO, sin llave ni costo) con tu ubicación. */
     private fun buildMapCard(): View {
         val frame = FrameLayout(this).apply {
-            background = rounded(skin.card, 20f, stroke = true)
-            outlineProvider = roundOutline(20f)
+            background = Style.glass(skin, 24f * s)
+            outlineProvider = roundOutline(24f)
             clipToOutline = true
         }
 
@@ -283,7 +388,7 @@ class MainActivity : Activity() {
 
         val header = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(16f), px(14f), px(16f), px(22f))
+            setPadding(px(18f), px(16f), px(18f), px(30f))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(RoadView.alpha(skin.card, 235), RoadView.alpha(skin.card, 0))
@@ -291,46 +396,47 @@ class MainActivity : Activity() {
         }
         header.addView(View(this).apply { background = rounded(Color.rgb(52, 211, 153), 4f) }, lp(px(8f), px(8f)))
         header.addView(gap(8f))
-        mapLabel = label("MAPA", 13f, skin.textDim).apply { letterSpacing = 0.08f }
+        mapLabel = overline("MAPA")
         header.addView(mapLabel)
         frame.addView(header, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(px(12f), px(28f), px(12f), px(12f))
+            setPadding(px(12f), px(20f), px(12f), px(12f))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(RoadView.alpha(skin.card, 0), RoadView.alpha(skin.card, 240))
+                intArrayOf(RoadView.alpha(skin.card, 0), RoadView.alpha(skin.card, 200))
             )
         }
-        bar.addView(label("© OpenStreetMap · © CARTO", 10f, skin.textDim).apply { gravity = Gravity.END }, lp(MATCH, WRAP))
+        bar.addView(label("© OpenStreetMap · © CARTO", 10f, skin.textDim).apply { gravity = Gravity.END; setPadding(0, 0, px(6f), 0) }, lp(MATCH, WRAP))
         bar.addView(gap(6f))
-        val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val buttons = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(8f), px(8f), px(8f), px(8f))
+            background = Style.glass(skin, 18f * s, strong = true)
+        }
         val maps = LinearLayout(this).apply {
             gravity = Gravity.CENTER
-            background = pressable(skin.accent, 14f)
+            background = accentButton(13f)
             setOnClickListener { openMaps() }
             setOnLongClickListener { pickApp("slot_maps"); true }
         }
+        Style.glow(maps, skin.accent, 8f * s)
         maps.addView(icon(R.drawable.ic_nav, 20f, Color.WHITE))
         maps.addView(gap(8f))
         maps.addView(label("Abrir Maps", 16f, Color.WHITE, medium = true))
-        buttons.addView(maps, lp(0, px(52f), 1f))
+        buttons.addView(maps, lp(0, px(50f), 1f))
         buttons.addView(gap(8f))
         // CarPlay discreto, por si quieres navegar desde el iPhone
-        val cp = LinearLayout(this).apply {
-            gravity = Gravity.CENTER
-            background = pressable(skin.button, 14f)
-            setPadding(px(12f), 0, px(12f), 0)
+        val cp = FrameLayout(this).apply {
+            background = glassButton(13f)
             contentDescription = "Abrir CarPlay"
             setOnClickListener { openCarPlay() }
             setOnLongClickListener { pickApp("slot_carplay"); true }
         }
-        cp.addView(icon(R.drawable.ic_carplay, 18f, skin.textDim))
-        cp.addView(gap(6f))
+        cp.addView(icon(R.drawable.ic_carplay, 22f, skin.textDim), FrameLayout.LayoutParams(px(22f), px(22f), Gravity.CENTER))
         carplayStatus = label("CarPlay", 13f, skin.textDim)
-        cp.addView(carplayStatus)
-        buttons.addView(cp, lp(WRAP, px(52f)))
+        buttons.addView(cp, lp(px(50f), px(50f)))
         bar.addView(buttons, lp(MATCH, WRAP))
         frame.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
         return frame
@@ -408,15 +514,16 @@ class MainActivity : Activity() {
     private fun buildClockCard(): View {
         val c = card().apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
         }
         val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         texts.addView(TextClock(this).apply {
             format24Hour = "HH:mm"
             format12Hour = "HH:mm"
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, 40f * s)
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, 54f * s)
             setTextColor(skin.text)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            letterSpacing = -0.02f
             includeFontPadding = false
         })
         texts.addView(gap(6f))
@@ -429,21 +536,24 @@ class MainActivity : Activity() {
         })
         c.addView(texts, lp(0, WRAP, 1f))
 
+        val btns = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val micBtn = FrameLayout(this).apply {
-            background = pressable(skin.accent, 16f)
+            background = accentButton(22f)
             contentDescription = "Asistente de voz"
             setOnClickListener { openAssistant() }
         }
-        micBtn.addView(icon(R.drawable.ic_mic, 26f, Color.WHITE), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
-        c.addView(micBtn, lp(px(50f), px(50f)))
-        c.addView(gap(8f))
+        Style.glow(micBtn, skin.accent, 8f * s)
+        micBtn.addView(icon(R.drawable.ic_mic, 20f, Color.WHITE), FrameLayout.LayoutParams(px(20f), px(20f), Gravity.CENTER))
+        btns.addView(micBtn, lp(px(44f), px(44f)))
+        btns.addView(gap(8f))
         val themeBtn = FrameLayout(this).apply {
-            background = pressable(skin.button, 16f)
+            background = glassButton(22f)
             contentDescription = "Temas y opciones"
             setOnClickListener { showOptions() }
         }
-        themeBtn.addView(icon(R.drawable.ic_palette, 26f, skin.text), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
-        c.addView(themeBtn, lp(px(50f), px(50f)))
+        themeBtn.addView(icon(R.drawable.ic_settings, 20f, skin.text), FrameLayout.LayoutParams(px(20f), px(20f), Gravity.CENTER))
+        btns.addView(themeBtn, lp(px(44f), px(44f)))
+        c.addView(btns)
         return c
     }
 
@@ -454,19 +564,23 @@ class MainActivity : Activity() {
             setOnClickListener { onMusicCardTap() }
         }
         musicArt = ImageView(this).apply {
-            background = rounded(skin.button, 14f)
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(skin.accent, Color.rgb(138, 92, 255))).apply { cornerRadius = 18f * s }
             scaleType = ImageView.ScaleType.CENTER
             setImageResource(R.drawable.ic_music)
-            imageTintList = ColorStateList.valueOf(skin.textDim)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            outlineProvider = roundOutline(18f)
             clipToOutline = true
         }
-        top.addView(musicArt, lp(px(72f), px(72f)))
+        Style.glow(musicArt, Color.rgb(90, 92, 255), 10f * s)
+        top.addView(musicArt, lp(px(76f), px(76f)))
         top.addView(gap(14f))
         val t = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         musicTitle = label("Sin reproducción", 18f, skin.text, medium = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         musicArtist = label("Toca para abrir música", 14f, skin.textDim).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        t.addView(overline("REPRODUCIENDO"))
+        t.addView(gap(5f))
         t.addView(musicTitle)
-        t.addView(gap(4f))
+        t.addView(gap(3f))
         t.addView(musicArtist)
         top.addView(t, lp(0, WRAP, 1f))
         c.addView(top)
@@ -475,10 +589,10 @@ class MainActivity : Activity() {
         musicProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
             progress = 0
-            progressTintList = ColorStateList.valueOf(skin.accent)
-            progressBackgroundTintList = ColorStateList.valueOf(RoadView.mix(skin.card, Color.WHITE, 0.12f))
+            progressTintList = ColorStateList.valueOf(Style.lighten(skin.accent, 0.15f))
+            progressBackgroundTintList = ColorStateList.valueOf(if (skin.isLight) Color.argb(30, 0, 0, 0) else Color.argb(26, 255, 255, 255))
         }
-        c.addView(musicProgress, lp(MATCH, px(6f)))
+        c.addView(musicProgress, lp(MATCH, px(4f)))
         val times = LinearLayout(this)
         musicPos = label("0:00", 12f, skin.textDim)
         musicDur = label("0:00", 12f, skin.textDim)
@@ -489,25 +603,27 @@ class MainActivity : Activity() {
         c.addView(spacer())
 
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        controls.addView(roundButton(R.drawable.ic_prev, 56f, Color.TRANSPARENT, skin.text, "Anterior") { mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS) })
+        controls.addView(roundButton(R.drawable.ic_prev, 52f, false, "Anterior") { mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS) })
         controls.addView(spacer())
-        val play = roundButton(R.drawable.ic_play, 68f, skin.text, skin.card, "Reproducir o pausar") { togglePlay() }
+        val play = roundButton(R.drawable.ic_play, 70f, true, "Reproducir o pausar") { togglePlay() }
         playBtn = play.getChildAt(0) as ImageView
         controls.addView(play)
         controls.addView(spacer())
-        controls.addView(roundButton(R.drawable.ic_next, 56f, Color.TRANSPARENT, skin.text, "Siguiente") { mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) })
+        controls.addView(roundButton(R.drawable.ic_next, 52f, false, "Siguiente") { mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) })
         c.addView(controls)
         return c
     }
 
-    private fun roundButton(res: Int, size: Float, bg: Int, fg: Int, desc: String, onClick: () -> Unit): FrameLayout {
+    private fun roundButton(res: Int, size: Float, primary: Boolean, desc: String, onClick: () -> Unit): FrameLayout {
         val f = FrameLayout(this).apply {
-            background = pressable(bg, size / 2f)
+            background = if (primary) accentButton(size / 2f) else glassButton(size / 2f)
             contentDescription = desc
             setOnClickListener { onClick() }
             layoutParams = lp(px(size), px(size))
         }
-        f.addView(icon(res, 26f, fg), FrameLayout.LayoutParams(px(26f), px(26f), Gravity.CENTER))
+        if (primary) Style.glow(f, skin.accent, 10f * s)
+        f.addView(icon(res, if (primary) 28f else 22f, if (primary) Color.WHITE else skin.text),
+            FrameLayout.LayoutParams(px(if (primary) 28f else 22f), px(if (primary) 28f else 22f), Gravity.CENTER))
         return f
     }
 
@@ -517,8 +633,9 @@ class MainActivity : Activity() {
 
     private fun buildDock(): View {
         val dock = LinearLayout(this).apply {
-            background = rounded(skin.card, 20f, stroke = true)
-            setPadding(px(8f), 0, px(8f), 0)
+            background = Style.glass(skin, 26f * s, strong = true)
+            setPadding(px(10f), 0, px(10f), 0)
+            gravity = Gravity.CENTER_VERTICAL
         }
         val slots = listOf(
             Slot("slot_maps", "Mapas", R.drawable.ic_pin) { openMaps() },
@@ -529,9 +646,7 @@ class MainActivity : Activity() {
             },
             Slot("slot_radio", "Radio", R.drawable.ic_radio) { openByLabel("Radio", null, "radio") },
             Slot("slot_camera", "Cámara", R.drawable.ic_camera) { openByLabel("Cámara", null, "camara", "camera", "avm", "360") },
-            Slot("slot_settings", "Ajustes", R.drawable.ic_settings) {
-                openByLabel("Ajustes", Intent(Settings.ACTION_SETTINGS), "ajustes del coche", "configuracion del coche", "carsetting", "car setting")
-            },
+            Slot("slot_vehicle", "Mi Camry", R.drawable.ic_car) { openPanel() },
             Slot("slot_apps", "Apps", R.drawable.ic_apps) { startActivity(Intent(this, AppsActivity::class.java)) }
         )
         for (slot in slots) {
@@ -540,11 +655,21 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER
                 background = pressable(Color.TRANSPARENT, 16f)
                 setOnClickListener { if (!launchSaved(slot.key)) slot.action() }
-                if (slot.key != "slot_apps") setOnLongClickListener { pickApp(slot.key); true }
+                if (slot.key != "slot_apps" && slot.key != "slot_vehicle") setOnLongClickListener { pickApp(slot.key); true }
             }
-            b.addView(icon(slot.icon, 26f, RoadView.mix(skin.textDim, skin.text, 0.6f)))
-            b.addView(gap(5f))
-            b.addView(label(slot.name, 13f, RoadView.mix(skin.textDim, skin.text, 0.6f)))
+            val hi = slot.key == "slot_vehicle"
+            val fg = if (hi) skin.text else RoadView.mix(skin.textDim, skin.text, 0.45f)
+            val sq = FrameLayout(this).apply {
+                background = GradientDrawable().apply {
+                    cornerRadius = 13f * s
+                    setColor(if (hi) Style.alpha(skin.accent, 56) else if (skin.isLight) Color.argb(12, 0, 0, 0) else Color.argb(13, 255, 255, 255))
+                }
+            }
+            if (hi) Style.glow(sq, skin.accent, 6f * s)
+            sq.addView(icon(slot.icon, 22f, fg), FrameLayout.LayoutParams(px(22f), px(22f), Gravity.CENTER))
+            b.addView(sq, lp(px(40f), px(40f)))
+            b.addView(gap(4f))
+            b.addView(label(slot.name, 11f, fg).apply { letterSpacing = 0.04f })
             dock.addView(b, lp(0, MATCH, 1f))
         }
         return dock
@@ -625,7 +750,10 @@ class MainActivity : Activity() {
             "Asistente: modelo (" + (if (Assistant.model(this) == Assistant.MODEL_FAST) "rápido" else "más listo") + ")",
             "Al encender, volver a esta pantalla: " + if (prefs.getBoolean("wake_home", true)) "Sí" else "No",
             "Al encender, reanudar la música: " + if (prefs.getBoolean("wake_music", true)) "Sí" else "No",
-            "Permiso para volver a esta pantalla" + if (canGoHomeFromBackground()) " (listo)" else " (falta)"
+            "Permiso para volver a esta pantalla" + if (canGoHomeFromBackground()) " (listo)" else " (falta)",
+            "OBD2: elegir adaptador" + (Obd.address(this)?.let { " (elegido)" } ?: ""),
+            "Al encender, activar el audio Bluetooth: " + if (prefs.getBoolean("wake_bt_audio", true)) "Sí" else "No",
+            "Ajustes del estéreo"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -664,6 +792,9 @@ class MainActivity : Activity() {
                     12 -> togglePref("wake_home", "Al encender volverá a esta pantalla", "Al encender se queda la última app")
                     13 -> togglePref("wake_music", "Al encender se reanuda la música", "Al encender la música queda en pausa")
                     14 -> askOverlayPermission()
+                    15 -> chooseObdAdapter()
+                    16 -> togglePref("wake_bt_audio", "Al encender se abrirá un momento la música Bluetooth", "Ya no se abrirá la música Bluetooth al encender")
+                    17 -> openByLabel("Ajustes", Intent(Settings.ACTION_SETTINGS), "ajustes del coche", "configuracion del coche", "carsetting", "car setting")
                 }
             }
             .setNegativeButton("Cerrar", null)

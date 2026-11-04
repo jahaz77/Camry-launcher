@@ -104,6 +104,7 @@ class CarService : Service() {
             off > 60 -> WakeLogic.carStarted(this, "encendido (estuve cerrado ${off}s)", goHome = true, greetDelay = 7000L)
         }
         handler.post(ticker)
+        Obd.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -161,7 +162,18 @@ object WakeLogic {
         if (lastHandled != 0L && now - lastHandled < 30_000L) return
         lastHandled = now
         val prefs = ThemeManager.prefs(app)
-        if (goHome && prefs.getBoolean("wake_home", true)) goHome(app, reason)
+        val btAudio = prefs.getBoolean("wake_bt_audio", true)
+        if (btAudio) {
+            // El estéreo solo activa el audio Bluetooth cuando se abre su app de música:
+            // la abrimos un momento y luego regresamos al launcher.
+            handler.postDelayed({
+                val what = CarActions.openBluetoothMusic(app)
+                EventLog.add(app, "Audio Bluetooth: abrí $what")
+            }, 1200L)
+            goHome(app, "tras activar Bluetooth", firstDelay = 3800L)
+        } else if (goHome && prefs.getBoolean("wake_home", true)) {
+            goHome(app, reason)
+        }
         greet(app, reason, greetDelay)
         if (prefs.getBoolean("wake_music", true)) handler.postDelayed({ resumeMusic(app) }, greetDelay + 6000L)
     }
@@ -170,12 +182,12 @@ object WakeLogic {
      * Pone el launcher al frente. El estéreo abre su app de Bluetooth unos segundos después
      * de encender, así que se vuelve a intentar durante los primeros ~20 segundos.
      */
-    private fun goHome(ctx: Context, reason: String) {
+    private fun goHome(ctx: Context, reason: String, firstDelay: Long = 500L) {
         if (!Settings.canDrawOverlays(ctx)) {
             EventLog.add(ctx, "No puedo volver al inicio: falta el permiso \"Mostrar sobre otras apps\"")
         }
         var tries = 0
-        for (delay in longArrayOf(500L, 3000L, 6000L, 10_000L, 15_000L, 21_000L)) {
+        for (delay in longArrayOf(firstDelay, firstDelay + 2500L, firstDelay + 5500L, firstDelay + 9500L, firstDelay + 14_500L, firstDelay + 20_500L)) {
             handler.postDelayed({
                 if (!MainActivity.visible) {
                     tries++

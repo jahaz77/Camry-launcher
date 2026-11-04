@@ -68,23 +68,28 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         val cx = w / 2f
         val vpY = h * 0.31f
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        c.drawColor(skin.road)
-        p.shader = RadialGradient(cx, vpY, w * 0.55f, intArrayOf(alpha(skin.accent, 90), alpha(skin.accent, 0)), null, Shader.TileMode.CLAMP)
+        // fondo transparente: se ve la luz ambiental de la pantalla
+        p.shader = RadialGradient(cx, vpY, w * 0.55f, intArrayOf(alpha(skin.accent, 70), alpha(skin.accent, 0)), null, Shader.TileMode.CLAMP)
         c.save(); c.scale(1f, 0.28f, cx, vpY); c.drawCircle(cx, vpY, w * 0.55f, p); c.restore()
         val topHalf = 8f * s
         val botHalf = 266f * s
         val path = Path().apply {
             moveTo(cx - topHalf, vpY); lineTo(cx + topHalf, vpY); lineTo(cx + botHalf, h); lineTo(cx - botHalf, h); close()
         }
-        p.shader = LinearGradient(0f, vpY, 0f, h, skin.road, mix(skin.road, Color.WHITE, 0.08f), Shader.TileMode.CLAMP)
+        p.shader = LinearGradient(0f, vpY, 0f, h, alpha(skin.road, 0), alpha(mix(skin.road, Color.WHITE, 0.07f), 240), Shader.TileMode.CLAMP)
         c.drawPath(path, p)
-        p.shader = null
+        // orillas de neón: se encienden hacia el frente
         p.style = Paint.Style.STROKE
         p.strokeCap = Paint.Cap.ROUND
-        p.strokeWidth = 2.5f * s
-        p.color = alpha(skin.accent, 230)
+        p.shader = LinearGradient(0f, vpY, 0f, h, alpha(skin.accent, 0), alpha(skin.accent, 70), Shader.TileMode.CLAMP)
+        p.strokeWidth = 10f * s
         c.drawLine(cx - topHalf, vpY, cx - botHalf, h, p)
         c.drawLine(cx + topHalf, vpY, cx + botHalf, h, p)
+        p.shader = LinearGradient(0f, vpY, 0f, h, alpha(skin.accent, 0), alpha(skin.accent, 255), Shader.TileMode.CLAMP)
+        p.strokeWidth = 2.5f * s
+        c.drawLine(cx - topHalf, vpY, cx - botHalf, h, p)
+        c.drawLine(cx + topHalf, vpY, cx + botHalf, h, p)
+        p.shader = null
         return bmp
     }
 
@@ -114,15 +119,7 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         dashes(c, cx - 10f * s, cx - 284f * s, vpY, h, 7f, 0.5f, 3f * s, alpha(Color.WHITE, 110))
         dashes(c, cx + 10f * s, cx + 284f * s, vpY, h, 7f, 0.5f, 3f * s, alpha(Color.WHITE, 110))
 
-        // Desvanecido hacia el horizonte
-        paint.style = Paint.Style.FILL
-        val fadeTop = vpY - 10f * s
-        paint.shader = fadeShader ?: LinearGradient(
-            0f, fadeTop, 0f, fadeTop + (h - fadeTop) * 0.45f,
-            skin.road, alpha(skin.road, 0), Shader.TileMode.CLAMP
-        ).also { fadeShader = it }
-        c.drawRect(0f, fadeTop, w, h, paint)
-        paint.shader = null
+        // (las líneas se desvanecen solas hacia el horizonte)
 
         drawSpeed(c, cx, s)
 
@@ -130,7 +127,7 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         val bob = if (moving) (sin(bobTime * 2.0 * Math.PI / 0.7) * 1.5 * s).toFloat() else 0f
         val rear = rearPhoto
         if (rear != null) {
-            val carW = 236f * s
+            val carW = 250f * s
             val carH = carW * rear.height / rear.width
             val bottom = h - 18f * s
             paint.style = Paint.Style.FILL
@@ -160,7 +157,6 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         val h = height.toFloat()
         val s = h / 484f
         val cx = w / 2f
-        c.drawColor(skin.road)
 
         // Resplandor detrás del auto
         val glowY = h * 0.66f
@@ -199,20 +195,46 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
         drawSpeed(c, cx, s)
     }
 
+    private val chipPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
     private fun drawSpeed(c: Canvas, cx: Float, s: Float) {
+        // velocidad grande, delgada y con brillo
         textPaint.color = skin.text
-        textPaint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        textPaint.textSize = 72f * s
-        textPaint.letterSpacing = -0.02f
-        c.drawText(speedKmh.roundToInt().toString(), cx, 22f * s + 58f * s, textPaint)
+        textPaint.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        textPaint.textSize = 96f * s
+        textPaint.letterSpacing = -0.03f
+        textPaint.setShadowLayer(26f * s, 0f, 0f, alpha(skin.accent, if (skin.isLight) 60 else 140))
+        c.drawText(speedKmh.roundToInt().toString(), cx, 6f * s + 82f * s, textPaint)
+        textPaint.clearShadowLayer()
         textPaint.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         textPaint.color = skin.textDim
-        textPaint.textSize = 14f * s
-        textPaint.letterSpacing = 0.14f
-        c.drawText("KM/H", cx, 22f * s + 84f * s, textPaint)
-        textPaint.textSize = 13f * s
-        textPaint.letterSpacing = 0f
-        c.drawText(heading, cx, 22f * s + 108f * s, textPaint)
+        textPaint.textSize = 12f * s
+        textPaint.letterSpacing = 0.3f
+        c.drawText("KM/H", cx, 6f * s + 100f * s, textPaint)
+        // pastillas: rumbo y temperatura del motor (si hay OBD2)
+        val chips = listOfNotNull(heading, CarState.coolant?.let { "Motor $it °C" })
+        textPaint.textSize = 12f * s
+        textPaint.letterSpacing = 0.02f
+        val padX = 12f * s
+        val gapX = 8f * s
+        val widths = chips.map { textPaint.measureText(it) + padX * 2 }
+        var x = cx - (widths.sum() + gapX * (chips.size - 1)) / 2f
+        val top = 6f * s + 112f * s
+        val hgt = 26f * s
+        chips.forEachIndexed { i, t ->
+            val r = RectF(x, top, x + widths[i], top + hgt)
+            chipPaint.style = Paint.Style.FILL
+            chipPaint.color = if (skin.isLight) Color.argb(14, 0, 0, 0) else Color.argb(13, 255, 255, 255)
+            c.drawRoundRect(r, hgt / 2, hgt / 2, chipPaint)
+            chipPaint.style = Paint.Style.STROKE
+            chipPaint.strokeWidth = 1f
+            chipPaint.color = if (skin.isLight) Color.argb(26, 0, 0, 0) else Color.argb(20, 255, 255, 255)
+            c.drawRoundRect(r, hgt / 2, hgt / 2, chipPaint)
+            val hot = t.startsWith("Motor") && (CarState.coolant ?: 0) >= 105
+            textPaint.color = if (hot) Color.rgb(255, 90, 95) else mix(skin.textDim, skin.text, 0.3f)
+            c.drawText(t, r.centerX(), r.centerY() + textPaint.textSize * 0.35f, textPaint)
+            x += widths[i] + gapX
+        }
     }
 
     /** Dibuja segmentos en perspectiva real: z = 1 es la parte baja de la pantalla. */
@@ -233,6 +255,7 @@ class RoadView(ctx: Context, private val skin: LauncherTheme) : View(ctx) {
                 val x1 = xTop + (xBot - xTop) * f1
                 val x2 = xTop + (xBot - xTop) * f2
                 paint.strokeWidth = max(1f, baseWidth * f1)
+                paint.color = alpha(color, (Color.alpha(color) * kotlin.math.min(1f, f1 * 2.4f)).toInt())
                 c.drawLine(x1, y1, x2, y2, paint)
             }
             z += period

@@ -13,6 +13,7 @@ object CarState {
     @Volatile var lat: Double? = null
     @Volatile var lon: Double? = null
     @Volatile var song: String? = null
+    @Volatile var coolant: Int? = null
 }
 
 /** Acciones que comparten el launcher y el asistente de voz. */
@@ -76,6 +77,25 @@ object CarActions {
             else -> AppUtils.findByLabel(ctx, app)?.let { AppUtils.launch(ctx, it) } ?: false
         }
         return if (ok) "Abierto: $app" else "No encontré la app: $app"
+    }
+
+    /**
+     * Abre la app de música Bluetooth del estéreo (es la que activa el canal de audio Bluetooth).
+     * Devuelve qué app abrió, para el registro.
+     */
+    fun openBluetoothMusic(ctx: Context): String {
+        ThemeManager.prefs(ctx).getString("slot_music", null)?.let { saved ->
+            android.content.ComponentName.unflattenFromString(saved)?.let { if (AppUtils.launch(ctx, it)) return it.packageName }
+        }
+        val sessions = runCatching {
+            (ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as android.media.session.MediaSessionManager)
+                .getActiveSessions(android.content.ComponentName(ctx, MediaListener::class.java))
+        }.getOrNull().orEmpty()
+        sessions.firstOrNull()?.packageName?.let { if (it != ctx.packageName && AppUtils.launchPackage(ctx, it)) return it }
+        AppUtils.findByLabel(ctx, "musica bt", "bt music", "bt musica", "bluetooth music", "musica bluetooth", "a2dp")
+            ?.let { if (AppUtils.launch(ctx, it)) return it.packageName }
+        AppUtils.findByLabel(ctx, "bluetooth")?.let { if (AppUtils.launch(ctx, it)) return it.packageName }
+        return "nada (no encontré la app de música Bluetooth)"
     }
 
     fun setTheme(ctx: Context, name: String): String {
