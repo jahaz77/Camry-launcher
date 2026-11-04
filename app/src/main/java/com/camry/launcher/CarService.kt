@@ -52,7 +52,11 @@ class CarService : Service() {
                     val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     val name = runCatching { dev?.name }.getOrNull() ?: "dispositivo"
                     EventLog.add(context, "Bluetooth conectado: $name")
-                    WakeLogic.carStarted(context, "bluetooth $name", goHome = true)
+                    // El adaptador OBD2 también es Bluetooth: ese no cuenta como encendido ni trae audio
+                    if (!AppUtils.normalize(name).contains("obd")) {
+                        WakeLogic.carStarted(context, "bluetooth $name", goHome = true)
+                        WakeLogic.activateBtAudio(context, "se conectó $name")
+                    }
                 }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> EventLog.add(context, "Bluetooth desconectado")
             }
@@ -156,6 +160,26 @@ object WakeLogic {
     private val handler = Handler(Looper.getMainLooper())
     private var lastHandled = 0L
 
+    private var lastBtActivation = 0L
+
+    /**
+     * El estéreo solo manda el audio Bluetooth a las bocinas cuando se abre su app de música:
+     * la abrimos un momento y luego regresamos al launcher. También se usa cuando el iPhone
+     * se conecta por Bluetooth después de encender.
+     */
+    fun activateBtAudio(ctx: Context, reason: String) {
+        val app = ctx.applicationContext
+        if (!ThemeManager.prefs(app).getBoolean("wake_bt_audio", true)) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastBtActivation != 0L && now - lastBtActivation < 20_000L) return
+        lastBtActivation = now
+        handler.postDelayed({
+            val what = CarActions.openBluetoothMusic(app)
+            EventLog.add(app, "Audio Bluetooth ($reason): abrí $what")
+        }, 1200L)
+        goHome(app, "tras activar Bluetooth", firstDelay = 3800L)
+    }
+
     fun carStarted(ctx: Context, reason: String, goHome: Boolean, greetDelay: Long = 6000L) {
         val app = ctx.applicationContext
         val now = SystemClock.elapsedRealtime()
@@ -164,13 +188,7 @@ object WakeLogic {
         val prefs = ThemeManager.prefs(app)
         val btAudio = prefs.getBoolean("wake_bt_audio", true)
         if (btAudio) {
-            // El estéreo solo activa el audio Bluetooth cuando se abre su app de música:
-            // la abrimos un momento y luego regresamos al launcher.
-            handler.postDelayed({
-                val what = CarActions.openBluetoothMusic(app)
-                EventLog.add(app, "Audio Bluetooth: abrí $what")
-            }, 1200L)
-            goHome(app, "tras activar Bluetooth", firstDelay = 3800L)
+            activateBtAudio(app, reason)
         } else if (goHome && prefs.getBoolean("wake_home", true)) {
             goHome(app, reason)
         }
