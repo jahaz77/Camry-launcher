@@ -174,10 +174,16 @@ object WakeLogic {
         if (lastBtActivation != 0L && now - lastBtActivation < 20_000L) return
         lastBtActivation = now
         handler.postDelayed({
-            val what = CarActions.openBluetoothMusic(app)
-            EventLog.add(app, "Audio Bluetooth ($reason): abrí $what")
-        }, 1200L)
-        goHome(app, "tras activar Bluetooth", firstDelay = 3800L)
+            // Primero en segundo plano (sin abrir pantallas); si no funciona, el método anterior.
+            BtAudio.activate(app) { ok, how ->
+                EventLog.add(app, "Audio Bluetooth ($reason) en segundo plano: " + (if (ok) "OK, " else "no, ") + how)
+                if (!ok && ThemeManager.prefs(app).getBoolean("bt_open_fallback", true)) {
+                    val what = CarActions.openBluetoothMusic(app)
+                    EventLog.add(app, "Audio Bluetooth: abrí $what un momento")
+                    goHome(app, "tras activar Bluetooth", firstDelay = 2600L)
+                }
+            }
+        }, 1500L)
     }
 
     fun carStarted(ctx: Context, reason: String, goHome: Boolean, greetDelay: Long = 6000L) {

@@ -770,7 +770,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\nMAPA: " + tiles + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
