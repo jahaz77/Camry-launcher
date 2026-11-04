@@ -303,7 +303,10 @@ class MainActivity : Activity() {
         })
     }
 
+    private var lastTouchAt = 0L
+
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        lastTouchAt = SystemClock.elapsedRealtime()
         runCatching { swipe.onTouchEvent(ev) }
         return super.dispatchTouchEvent(ev)
     }
@@ -1004,6 +1007,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         visible = false
         stoppedAt = SystemClock.elapsedRealtime()
+        if (!isChangingConfigurations) WakeLogic.onLauncherCovered(this, lastTouchAt)
         super.onStop()
     }
 
@@ -1163,7 +1167,10 @@ class MainActivity : Activity() {
             if (dev?.vendorId != APPLE_VENDOR_ID) return
             if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
                 carplayStatus.text = "iPhone listo"
-                if (prefs.getBoolean("auto_carplay", true)) handler.postDelayed({ openCarPlay() }, 1500L)
+                if (prefs.getBoolean("auto_carplay", true)) handler.postDelayed({
+                    WakeLogic.selfLaunchAt = SystemClock.elapsedRealtime()
+                    openCarPlay()
+                }, 1500L)
             } else {
                 carplayStatus.text = "CarPlay"
             }

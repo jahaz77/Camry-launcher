@@ -159,7 +159,12 @@ class AssistantActivity : Activity() {
         return out
     }
 
-    private fun runTool(name: String, input: JSONObject): String = when (name) {
+    private fun runTool(name: String, input: JSONObject): String = run {
+        WakeLogic.selfLaunchAt = android.os.SystemClock.elapsedRealtime() + 10_000L
+        runToolInner(name, input)
+    }
+
+    private fun runToolInner(name: String, input: JSONObject): String = when (name) {
         "navegar" -> CarActions.navigate(this, input.optString("destino"))
         "musica" -> CarActions.media(this, input.optString("accion"))
         "abrir_app" -> CarActions.openApp(this, input.optString("app"))

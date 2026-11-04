@@ -178,6 +178,7 @@ object WakeLogic {
             BtAudio.activate(app) { ok, how ->
                 EventLog.add(app, "Audio Bluetooth ($reason) en segundo plano: " + (if (ok) "OK, " else "no, ") + how)
                 if (!ok && ThemeManager.prefs(app).getBoolean("bt_open_fallback", true)) {
+                    selfLaunchAt = SystemClock.elapsedRealtime()
                     val what = CarActions.openBluetoothMusic(app)
                     EventLog.add(app, "Audio Bluetooth: abrí $what un momento")
                     goHome(app, "tras activar Bluetooth", firstDelay = 2600L)
@@ -186,9 +187,38 @@ object WakeLogic {
         }, 1500L)
     }
 
+    // Ventana después de encender en la que, si una app del estéreo (p. ej. Bluetooth)
+    // se abre sola encima del launcher, lo regresamos al frente.
+    @Volatile var startWindowUntil = 0L
+    @Volatile var selfLaunchAt = 0L
+    private var reasserts = 0
+
+    /** Lo llama MainActivity cuando algo la tapa. */
+    fun onLauncherCovered(ctx: Context, lastTouchAt: Long) {
+        val app = ctx.applicationContext
+        val now = SystemClock.elapsedRealtime()
+        if (now > startWindowUntil) return
+        if (now - lastTouchAt < 3000L) return          // lo abriste tú desde el launcher
+        if (now - selfLaunchAt < 4000L) return         // lo abrimos nosotros (audio Bluetooth)
+        if (!ThemeManager.prefs(app).getBoolean("wake_home", true)) return
+        if (reasserts >= 3) return
+        reasserts++
+        handler.postDelayed({
+            if (!MainActivity.visible) {
+                val ok = runCatching {
+                    app.startActivity(Intent(app, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); true
+                }.getOrDefault(false)
+                EventLog.add(app, "Una app se abrió sola encima; volví al inicio: " + if (ok) "pedido" else "falló")
+            }
+        }, 1500L)
+    }
+
     fun carStarted(ctx: Context, reason: String, goHome: Boolean, greetDelay: Long = 6000L) {
         val app = ctx.applicationContext
         val now = SystemClock.elapsedRealtime()
+        startWindowUntil = now + 45_000L
+        reasserts = 0
         if (lastHandled != 0L && now - lastHandled < 30_000L) return
         lastHandled = now
         val prefs = ThemeManager.prefs(app)
