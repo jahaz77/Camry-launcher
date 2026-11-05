@@ -118,6 +118,7 @@ class MainActivity : Activity() {
         super.onResume()
         if (ThemeManager.current(this).id != skin.id) { recreate(); return }
         map?.onResume()
+        if (lastFix == 0L || SystemClock.elapsedRealtime() - lastFix > 10_000L) startLocation(force = locationManager != null)
         refreshIphoneStatus()
         if (mediaNeedsAccess) setupMedia()
     }
@@ -134,6 +135,7 @@ class MainActivity : Activity() {
         Obd.unlisten(obdListener)
         runCatching { netCallback?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } }
         runCatching { locationManager?.removeUpdates(locationListener) }
+        runCatching { locationManager?.unregisterGnssStatusCallback(gnssCallback) }
         runCatching { mediaManager?.removeOnActiveSessionsChangedListener(sessionsListener) }
         controller?.unregisterCallback(mediaCallback)
         super.onDestroy()
@@ -793,7 +795,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
@@ -1142,6 +1144,9 @@ class MainActivity : Activity() {
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(l: Location) {
+            // Las ubicaciones pasivas sin velocidad no deben poner el velocímetro en 0
+            if (l.provider == LocationManager.PASSIVE_PROVIDER && !l.hasSpeed() && lastFix != 0L &&
+                SystemClock.elapsedRealtime() - lastFix < 3000L) { updateMap(l, road.speedKmh); return }
             lastFix = SystemClock.elapsedRealtime()
             val kmh = if (l.hasSpeed()) l.speed * 3.6f else 0f
             road.speedKmh = if (kmh < 2f) 0f else kmh
@@ -1161,16 +1166,45 @@ class MainActivity : Activity() {
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
 
-    private fun startLocation() {
+    private var lastLocRestart = 0L
+    private var satsUsed = 0
+    private var satsSeen = 0
+
+    private val gnssCallback = object : android.location.GnssStatus.Callback() {
+        override fun onSatelliteStatusChanged(status: android.location.GnssStatus) {
+            satsSeen = status.satelliteCount
+            satsUsed = (0 until status.satelliteCount).count { status.usedInFix(it) }
+        }
+    }
+
+    /**
+     * Pide la ubicación al GPS. Con force=true se vuelve a registrar: después de que el estéreo
+     * duerme y despierta, el GPS a veces deja de mandar datos a quien ya estaba escuchando.
+     */
+    private fun startLocation(force: Boolean = false) {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             road.heading = "Sin permiso de ubicación"
             return
         }
-        if (locationManager != null) return
+        if (locationManager != null && !force) return
         val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        runCatching { locationManager?.removeUpdates(locationListener) }
+        runCatching { locationManager?.unregisterGnssStatusCallback(gnssCallback) }
         locationManager = lm
+        lastLocRestart = SystemClock.elapsedRealtime()
         runCatching { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500L, 0f, locationListener, Looper.getMainLooper()) }
             .onFailure { road.heading = "GPS no disponible" }
+        // También aprovecha las ubicaciones que piden otras apps (Maps, CarPlay…)
+        runCatching { lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 500L, 0f, locationListener, Looper.getMainLooper()) }
+        runCatching { lm.registerGnssStatusCallback(gnssCallback, handler) }
+        if (force) EventLog.add(this, "GPS reiniciado")
+    }
+
+    fun gpsInfo(): String {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val on = runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)
+        val age = if (lastFix == 0L) "nunca" else "hace ${(SystemClock.elapsedRealtime() - lastFix) / 1000}s"
+        return "GPS: " + (if (on) "activado" else "APAGADO") + ", último dato $age, satélites $satsUsed/$satsSeen"
     }
 
     private fun compass(b: Float): String {
@@ -1335,6 +1369,15 @@ class MainActivity : Activity() {
             if (lastFix != 0L && SystemClock.elapsedRealtime() - lastFix > 5000L) {
                 road.speedKmh = 0f
                 road.heading = "Buscando GPS"
+            }
+            // Sin datos del GPS por 15 s: volver a registrarse (cada 20 s como máximo)
+            val nowE = SystemClock.elapsedRealtime()
+            if (visible && (lastFix == 0L || nowE - lastFix > 15_000L) && nowE - lastLocRestart > 20_000L) startLocation(force = true)
+            // Revisar internet de vez en cuando (al despertar el aviso podía quedarse viejo)
+            if (tickCount % 5 == 0) {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val now = runCatching { cm.activeNetwork != null }.getOrDefault(online)
+                if (now != online) { online = now; updateMapLabel(); if (now) refreshMap() }
             }
             updateProgress()
             tickCount++
