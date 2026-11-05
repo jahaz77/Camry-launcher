@@ -153,41 +153,62 @@ object Lights {
 
     @Volatile private var busy = false
 
+    /** Todo lo de Bluetooth corre en su propio hilo y nunca debe tumbar la app. */
     private fun send(ctx: Context, cmds: List<ByteArray>, attempt: Int = 1) {
         val app = ctx.applicationContext
+        h.post {
+            try { sendNow(app, cmds, attempt) } catch (e: Throwable) {
+                busy = false
+                log(app, "error ${e.javaClass.simpleName}: ${e.message ?: ""}")
+            }
+        }
+    }
+
+    private fun sendNow(app: Context, cmds: List<ByteArray>, attempt: Int) {
         val addr = address(app) ?: run { log(app, "no hay luces elegidas"); return }
         val ad = BluetoothAdapter.getDefaultAdapter() ?: run { log(app, "sin Bluetooth"); return }
+        if (!ad.isEnabled) { log(app, "el Bluetooth de Android está apagado"); return }
         if (busy) { h.postDelayed({ send(app, cmds, attempt) }, 1500L); return }
         busy = true
         val dev: BluetoothDevice = ad.getRemoteDevice(addr)
         var finished = false
-        lateinit var gatt: BluetoothGatt
+        var gatt: BluetoothGatt? = null
         fun finish(msg: String, retry: Boolean = false) {
             if (finished) return
             finished = true
-            h.postDelayed({ runCatching { gatt.disconnect(); gatt.close() }; busy = false
-                if (retry && attempt < 3) h.postDelayed({ send(app, cmds, attempt + 1) }, 2000L) }, 400L)
+            h.postDelayed({
+                runCatching { gatt?.disconnect() }; runCatching { gatt?.close() }
+                busy = false
+                if (retry && attempt < 3) h.postDelayed({ send(app, cmds, attempt + 1) }, 2000L)
+            }, 400L)
             log(app, msg + if (retry && attempt < 3) " (reintento ${attempt + 1})" else "")
         }
         val cb = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) h.post { g.discoverServices() }
-                else if (newState == BluetoothProfile.STATE_DISCONNECTED) finish("desconectado (estado $status)", retry = true)
+                h.post {
+                    if (newState == BluetoothProfile.STATE_CONNECTED) runCatching { g.discoverServices() }
+                    else if (newState == BluetoothProfile.STATE_DISCONNECTED) finish("desconectado (estado $status)", retry = true)
+                }
             }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-                val ch: BluetoothGattCharacteristic? = g.getService(SERVICE)?.getCharacteristic(CHAR)
-                    ?: g.services.flatMap { it.characteristics }.firstOrNull {
-                        it.properties and (BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                h.post {
+                    val ch: BluetoothGattCharacteristic? = runCatching {
+                        g.getService(SERVICE)?.getCharacteristic(CHAR)
+                            ?: g.services.flatMap { it.characteristics }.firstOrNull {
+                                it.properties and (BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                            }
+                    }.getOrNull()
+                    if (ch == null) { finish("no encontré dónde escribir"); return@post }
+                    ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                    cmds.forEachIndexed { i, c ->
+                        h.postDelayed({ runCatching { ch.value = c; g.writeCharacteristic(ch) } }, 150L * i + 100L)
                     }
-                if (ch == null) { finish("no encontré dónde escribir"); return }
-                ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                cmds.forEachIndexed { i, c ->
-                    h.postDelayed({ ch.value = c; runCatching { g.writeCharacteristic(ch) } }, 150L * i + 100L)
+                    h.postDelayed({ finish("color enviado") }, 150L * cmds.size + 600L)
                 }
-                h.postDelayed({ finish("color enviado") }, 150L * cmds.size + 600L)
             }
         }
         gatt = dev.connectGatt(app, false, cb, BluetoothDevice.TRANSPORT_LE)
+        if (gatt == null) { finish("no pude conectar (Bluetooth de Android no disponible)"); return }
         h.postDelayed({ if (!finished) finish("no respondió (¿la app Lotus está conectada?)", retry = true) }, 12_000L)
     }
 }

@@ -90,6 +90,7 @@ class CarService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         startForeground(1, buildNotification())
         registerReceiver(receiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -232,7 +233,7 @@ object WakeLogic {
         // ¿Quién viene manejando? Se revisa qué teléfono se conecta en el primer minuto
         var profileFound = false
         for (d in longArrayOf(1500L, 4000L, 8000L, 15_000L, 25_000L, 40_000L, 60_000L, 90_000L)) handler.postDelayed({
-            if (!profileFound) Profiles.detect(app, "encendido", force = true)?.let { profileFound = true }
+            if (!profileFound) Thread { runCatching { Profiles.detect(app, "encendido", force = true)?.let { profileFound = true } } }.start()
         }, d)
         // si nadie se detectó, igual se ponen las luces del último perfil
         handler.postDelayed({

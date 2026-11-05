@@ -18,7 +18,7 @@ object Commute {
 
     data class Eta(val minutes: Int, val km: Double, val rush: Float, val at: Long)
 
-    private val cache = HashMap<String, Eta>()
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Eta>()
 
     fun address(ctx: Context, key: String) = ThemeManager.prefs(ctx).getString(if (key == "home") "addr_home" else "addr_work", "") ?: ""
 

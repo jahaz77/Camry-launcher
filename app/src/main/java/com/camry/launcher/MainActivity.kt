@@ -91,11 +91,20 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         skin = ThemeManager.current(this)
         val dm = resources.displayMetrics
         s = min(maxOf(dm.widthPixels, dm.heightPixels) / 1024f, min(dm.widthPixels, dm.heightPixels) / 600f)
         setContentView(buildUi())
         Profiles.onChange = { if (visible && !isFinishing) recreate() }
+        CrashLog.unseen(this)?.let { err ->
+            CrashLog.markSeen(this)
+            handler.postDelayed({
+                dialog().setTitle("La app se cerró por un error")
+                    .setMessage("Mándale una foto de esto a Claude para arreglarlo:\n\n$err")
+                    .setPositiveButton("OK", null).show()
+            }, 6000L)
+        }
         askPermissions()
         registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED).apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -875,7 +884,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this) + "\n\nÚLTIMO ERROR:\n" + (CrashLog.last(this) ?: "ninguno"))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
@@ -1240,8 +1249,8 @@ class MainActivity : Activity() {
             CarState.lat = l.latitude
             CarState.lon = l.longitude
             road.heading = if (l.hasBearing() && kmh >= 5f) "Rumbo " + compass(l.bearing) else "GPS listo"
-            if (l.provider == LocationManager.GPS_PROVIDER) TripLog.gps(this@MainActivity, l)
-            updateMap(l, kmh)
+            if (l.provider == LocationManager.GPS_PROVIDER) runCatching { TripLog.gps(this@MainActivity, l) }
+            runCatching { updateMap(l, kmh) }
         }
 
         override fun onProviderEnabled(provider: String) {}
@@ -1472,8 +1481,10 @@ class MainActivity : Activity() {
             }
             updateProgress()
             tickCount++
-            if (tickCount % 60 == 0) refreshCommute()
-            if (tickCount % 1800 == 0 && tickCount > 0) refreshWeather()
+            runCatching {
+                if (tickCount % 60 == 0) refreshCommute()
+                if (tickCount % 1800 == 0 && tickCount > 0) refreshWeather()
+            }
             handler.postDelayed(this, 1000L)
         }
     }

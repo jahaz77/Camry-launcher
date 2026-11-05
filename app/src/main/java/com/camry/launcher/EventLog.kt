@@ -10,6 +10,7 @@ object EventLog {
     private const val KEY = "event_log"
     private const val MAX = 25
 
+    @Synchronized
     fun add(ctx: Context, msg: String) {
         val p = ThemeManager.prefs(ctx)
         val line = SimpleDateFormat("dd/MM HH:mm:ss", Locale.US).format(Date()) + "  " + msg
