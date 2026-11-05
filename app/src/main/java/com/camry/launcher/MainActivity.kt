@@ -121,7 +121,7 @@ class MainActivity : Activity() {
             greetedThisRun = true
             val up = SystemClock.elapsedRealtime()
             EventLog.add(this, "Launcher iniciado (estéreo encendido hace ${up / 1000}s)")
-            if (prefs.getBoolean("startup_anim", true)) playStartup()
+            if (prefs.getBoolean("startup_anim", true)) startupUntil = SystemClock.elapsedRealtime() + 3 * 60_000L
             // el saludo de arranque lo hace CarService
         }
     }
@@ -130,6 +130,11 @@ class MainActivity : Activity() {
         super.onResume()
         ThemeManager.current(this).let { if (it.id != skin.id || it.accent != skin.accent) { recreate(); return } }
         if (::mapPanel.isInitialized) mapPanel.map?.onResume()
+        // La animación sale cuando el inicio de verdad se ve (al arrancar, el estéreo pone encima su app de Bluetooth)
+        if (startupUntil != 0L) {
+            if (SystemClock.elapsedRealtime() < startupUntil) handler.postDelayed({ if (visible) playStartup() }, 300L)
+            startupUntil = 0L
+        }
         if (lastFix == 0L || SystemClock.elapsedRealtime() - lastFix > 10_000L) startLocation(force = locationManager != null)
         refreshIphoneStatus()
         if (mediaNeedsAccess) setupMedia()
@@ -1116,7 +1121,7 @@ class MainActivity : Activity() {
         if (stoppedAt != 0L) EventLog.add(this, "Launcher visible otra vez (${away / 1000}s oculto)")
         if (stoppedAt != 0L && away > 60_000L) {
             WakeLogic.carStarted(this, "launcher visible", goHome = false)
-            if (prefs.getBoolean("startup_anim", true)) playStartup()
+            if (prefs.getBoolean("startup_anim", true)) startupUntil = SystemClock.elapsedRealtime() + 3 * 60_000L
         }
         stoppedAt = 0L
     }
@@ -1494,6 +1499,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- animación de arranque
 
     private var startup: StartupView? = null
+    private var startupUntil = 0L
 
     private fun playStartup() {
         if (startup != null) return
