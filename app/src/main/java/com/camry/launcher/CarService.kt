@@ -243,7 +243,7 @@ object WakeLogic {
         }, d)
         // si nadie se detectó, igual se ponen las luces del último perfil
         handler.postDelayed({
-            if (!profileFound) Profiles.active(app)?.let { p -> Lights.address(app)?.let { Lights.apply(app, p.lightColor, p.brightness) } }
+            if (!profileFound) Profiles.active(app)?.let { p -> Lights.address(app)?.let { Lights.applyProfile(app, p) } }
         }, 20_000L)
         greet(app, reason, greetDelay)
         if (prefs.getBoolean("wake_music", true)) handler.postDelayed({ resumeMusic(app) }, greetDelay + 6000L)

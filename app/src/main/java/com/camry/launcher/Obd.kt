@@ -221,6 +221,13 @@ object Obd {
 
     private fun alerts(s: Snapshot) {
         val now = SystemClock.elapsedRealtime()
+        // luces ambientales: rojo si se calienta, amarillo si el voltaje baja, ámbar con check engine
+        val t0 = s.coolant
+        val cur = Lights.alert
+        val hot = t0 != null && (t0 >= 105 || (cur == Lights.Alert.CALIENTE && t0 >= 100))
+        val low = s.volts != null && (s.rpm ?: 0) > 600 && (s.volts < 12.2f || (cur == Lights.Alert.VOLTAJE && s.volts < 12.6f))
+        val cel = (s.dtcCount ?: 0) > 0
+        runCatching { Lights.setAlert(app, when { hot -> Lights.Alert.CALIENTE; low -> Lights.Alert.VOLTAJE; cel -> Lights.Alert.CHECK; else -> null }) }
         val t = s.coolant
         if (t != null && t >= 105 && now - lastHotAlert > 10 * 60_000L) {
             lastHotAlert = now

@@ -143,7 +143,7 @@ class ProfilesActivity : Activity() {
             addView(row)
         }
         val themeName = p.themeId?.let { id -> ThemeManager.loadAll(this).firstOrNull { it.id == id }?.name } ?: "El actual"
-        grid.addView(cell("COLOR", colorName(p.accent), p.accent) { pickColor("Color de ${p.name}") { col -> save(p.copy(accent = col, lightColor = if (p.lightColor == p.accent) col else p.lightColor)) } }, lp(0, WRAP, 1f))
+        grid.addView(cell("COLOR", colorName(p.accent), p.accent) { ColorPicker.show(this, skin, s, "Color de ${p.name}", p.accent) { col -> save(p.copy(accent = col, lightColor = if (p.lightColor == p.accent) col else p.lightColor)) } }, lp(0, WRAP, 1f))
         grid.addView(gap(10f))
         grid.addView(cell("TEMA", themeName, null) { pickTheme(p) }, lp(0, WRAP, 1f))
         grid.addView(gap(10f))
@@ -164,24 +164,65 @@ class ProfilesActivity : Activity() {
         lights.addView(lh)
         lights.addView(gap(12f))
         val sw = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        for (col in Profiles.PALETTE) {
-            val selected = col == p.lightColor
+        val ring = if (skin.isLight) Color.BLACK else Color.WHITE
+        val shown = Profiles.PALETTE.filter { it != Profiles.PALETTE[6] && it != Color.WHITE }
+        for (col in shown) {
             val dot = FrameLayout(this).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL; setColor(col)
-                    if (selected) setStroke(px(3f), if (skin.isLight) Color.BLACK else Color.WHITE)
+                    if (col == p.lightColor) setStroke(px(3f), ring)
                 }
-                setOnClickListener {
-                    val np = p.copy(lightColor = col)
-                    save(np)
-                    if (Lights.address(this@ProfilesActivity) != null) Lights.apply(this@ProfilesActivity, col, np.brightness)
-                }
+                setOnClickListener { setLights(p.copy(lightColor = col)) }
             }
             sw.addView(dot, lp(px(34f), px(34f)))
             sw.addView(gap(9f))
         }
+        // rueda de color: muestra el color personalizado si no es uno de los de arriba
+        val custom = p.lightColor !in shown
+        val wheelBtn = FrameLayout(this).apply {
+            background = if (custom) GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(p.lightColor); setStroke(px(3f), ring) }
+            else GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                gradientType = GradientDrawable.SWEEP_GRADIENT
+                colors = intArrayOf(Color.RED, Color.YELLOW, Color.GREEN, Color.CYAN, Color.BLUE, Color.MAGENTA, Color.RED)
+            }
+            contentDescription = "Elegir cualquier color"
+            setOnClickListener { ColorPicker.show(this@ProfilesActivity, skin, s, "Luces de ${p.name}", p.lightColor) { col -> setLights(p.copy(lightColor = col)) } }
+        }
+        wheelBtn.addView(text("+", 18f, Color.WHITE, medium = true).apply { gravity = Gravity.CENTER; setShadowLayer(4f, 0f, 0f, Color.BLACK) }, FrameLayout.LayoutParams(MATCH, MATCH))
+        sw.addView(wheelBtn, lp(px(34f), px(34f)))
         lights.addView(sw)
-        lights.addView(gap(10f))
+        lights.addView(gap(12f))
+        // efecto
+        val eff = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(12f), 0, px(12f), 0)
+            background = pill(Color.argb(14, 255, 255, 255), 12f, Color.TRANSPARENT)
+            setOnClickListener { pickEffect(p) }
+        }
+        eff.addView(text("Efecto", 13f, skin.textDim))
+        eff.addView(gap(10f))
+        eff.addView(text(Lights.effectName(p.effect), 15f, skin.text).apply { maxLines = 1 }, lp(0, WRAP, 1f))
+        eff.addView(text("›", 18f, skin.textDim))
+        lights.addView(eff, lp(MATCH, px(38f)))
+        if (p.effect != 0) {
+            lights.addView(gap(6f))
+            val sp = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            sp.addView(text("Lento", 12f, skin.textDim))
+            sp.addView(SeekBar(this).apply {
+                max = 100; progress = p.speed
+                progressTintList = android.content.res.ColorStateList.valueOf(p.accent)
+                thumbTintList = android.content.res.ColorStateList.valueOf(p.accent)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar, v: Int, fromUser: Boolean) {}
+                    override fun onStartTrackingTouch(sb: SeekBar) {}
+                    override fun onStopTrackingTouch(sb: SeekBar) { setLights(p.copy(speed = sb.progress), redraw = false) }
+                })
+            }, lp(0, WRAP, 1f))
+            sp.addView(text("Rápido", 12f, skin.textDim))
+            lights.addView(sp, lp(MATCH, WRAP))
+        }
+        lights.addView(gap(6f))
         val bar = SeekBar(this).apply {
             max = 100; progress = p.brightness
             progressTintList = android.content.res.ColorStateList.valueOf(p.lightColor)
@@ -189,11 +230,7 @@ class ProfilesActivity : Activity() {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, v: Int, fromUser: Boolean) { brightTxt.text = "$v%" }
                 override fun onStartTrackingTouch(sb: SeekBar) {}
-                override fun onStopTrackingTouch(sb: SeekBar) {
-                    val np = p.copy(brightness = sb.progress.coerceAtLeast(5))
-                    Profiles.update(this@ProfilesActivity, np)
-                    if (Lights.address(this@ProfilesActivity) != null) Lights.apply(this@ProfilesActivity, np.lightColor, np.brightness)
-                }
+                override fun onStopTrackingTouch(sb: SeekBar) { setLights(p.copy(brightness = sb.progress.coerceAtLeast(5)), redraw = false) }
             })
         }
         lights.addView(bar, lp(MATCH, WRAP))
@@ -206,6 +243,20 @@ class ProfilesActivity : Activity() {
             setOnClickListener { Profiles.activate(this@ProfilesActivity, p, "elegido a mano"); render() }
         }, lp(MATCH, px(48f)))
         return c
+    }
+
+    /** Guarda el cambio de luces y lo manda al controlador para verlo al momento. */
+    private fun setLights(np: Profile, redraw: Boolean = true) {
+        if (redraw) save(np) else Profiles.update(this, np)
+        if (Lights.address(this) != null) Lights.applyProfile(this, np)
+    }
+
+    private fun pickEffect(p: Profile) {
+        val list = Lights.EFFECTS
+        val cur = list.indexOfFirst { it.code == p.effect }.coerceAtLeast(0)
+        dialog().setTitle("Efecto de las luces de ${p.name}")
+            .setSingleChoiceItems(list.map { it.name }.toTypedArray(), cur) { d, w -> d.dismiss(); setLights(p.copy(effect = list[w].code)) }
+            .setNegativeButton("Cancelar", null).show()
     }
 
     private fun save(p: Profile) {
@@ -260,7 +311,9 @@ class ProfilesActivity : Activity() {
     private fun lightsMenu() {
         val on = Lights.isOn(this)
         dialog().setTitle("Luces: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult)
-            .setItems(arrayOf("Buscar luces (ELK-BLEDOM)", "Probar con el color del perfil activo", if (on) "Apagar las luces" else "Encender las luces")) { _, w ->
+            .setItems(arrayOf("Buscar luces (ELK-BLEDOM)", "Probar con el color del perfil activo", if (on) "Apagar las luces" else "Encender las luces",
+                "Avisos del motor en las luces: " + if (Lights.alertsOn(this)) "Sí" else "No",
+                "Probar aviso: motor caliente (5 s)")) { _, w ->
                 when (w) {
                     0 -> {
                         toast("Buscando luces… (8 segundos). Si la app Lotus del celular está conectada, ciérrala.")
@@ -271,7 +324,7 @@ class ProfilesActivity : Activity() {
                                     .setItems(found.map { "${it.second}  (${it.first})" }.toTypedArray()) { _, k ->
                                         Lights.choose(this, found[k].first, found[k].second)
                                         val p = Profiles.active(this) ?: Profiles.all(this).first()
-                                        Lights.apply(this, p.lightColor, p.brightness)
+                                        Lights.applyProfile(this, p)
                                         render()
                                     }.setNegativeButton("Cancelar", null).show()
                             }
@@ -279,12 +332,21 @@ class ProfilesActivity : Activity() {
                     }
                     1 -> {
                         val p = Profiles.active(this) ?: Profiles.all(this).first()
-                        Lights.apply(this, p.lightColor, p.brightness)
+                        Lights.applyProfile(this, p)
                         toast("Mandando color… revisa Diagnóstico si no cambian")
+                    }
+                    3 -> {
+                        Lights.setAlertsOn(this, !Lights.alertsOn(this))
+                        if (!Lights.alertsOn(this)) Lights.setAlert(this, null)
+                        toast(if (Lights.alertsOn(this)) "Rojo si el motor se calienta, amarillo si baja el voltaje, ámbar con check engine" else "Las luces ya no avisan problemas del motor")
+                    }
+                    4 -> {
+                        Lights.setAlert(this, Lights.Alert.CALIENTE)
+                        android.os.Handler(mainLooper).postDelayed({ Lights.setAlert(this, null) }, 5000L)
                     }
                     2 -> {
                         Lights.setOn(this, !on)
-                        if (on) Lights.turnOff(this) else (Profiles.active(this) ?: Profiles.all(this).first()).let { Lights.apply(this, it.lightColor, it.brightness) }
+                        if (on) Lights.turnOff(this) else (Profiles.active(this) ?: Profiles.all(this).first()).let { Lights.applyProfile(this, it) }
                         render()
                     }
                 }

@@ -70,6 +70,81 @@ object Lights {
 
     fun turnOff(ctx: Context) = send(ctx, listOf(off()))
 
+    // ------------------------------------------------------------------ efectos
+
+    data class Effect(val code: Int, val name: String)
+    /** code 0 = color fijo; -1 = respirar con el color del perfil (el más parecido que trae el controlador). */
+    val EFFECTS = listOf(
+        Effect(0, "Color fijo"),
+        Effect(-1, "Respirar (color del perfil)"),
+        Effect(0x8A, "Degradado arcoíris"),
+        Effect(0x89, "Degradado rojo, verde y azul"),
+        Effect(0x93, "Degradado rojo y azul"),
+        Effect(0x94, "Degradado verde y azul"),
+        Effect(0x92, "Degradado rojo y verde"),
+        Effect(0x88, "Saltos de 7 colores"),
+        Effect(0x87, "Saltos rojo, verde y azul"),
+        Effect(0x95, "Destellos de colores")
+    )
+    fun effectName(code: Int) = EFFECTS.firstOrNull { it.code == code }?.name ?: "Color fijo"
+
+    private fun mode(code: Int) = bytes(0x7E, 0x00, 0x03, code, 0x03, 0x00, 0x00, 0x00, 0xEF)
+    /** Velocidad del efecto, 0-100. */
+    private fun speed(v: Int) = bytes(0x7E, 0x00, 0x02, v.coerceIn(0, 100), 0x00, 0x00, 0x00, 0x00, 0xEF)
+
+    /** Código de "respirar" del controlador más parecido al color (solo trae 7 colores base). */
+    private fun breathCode(c: Int): Int {
+        val hsv = FloatArray(3); Color.colorToHSV(c, hsv)
+        if (hsv[1] < 0.25f) return 0x91                       // blanco
+        val h = hsv[0]
+        return when {
+            h < 25 || h >= 345 -> 0x8B                        // rojo
+            h < 75 -> 0x8E                                    // amarillo
+            h < 160 -> 0x8C                                   // verde
+            h < 200 -> 0x8F                                   // cian
+            h < 265 -> 0x8D                                   // azul
+            else -> 0x90                                      // magenta / rosa
+        }
+    }
+
+    /** Pone las luces como dice el perfil (color o efecto), salvo que haya un aviso del motor. */
+    fun applyProfile(ctx: Context, p: Profile) {
+        if (!isOn(ctx)) { send(ctx, listOf(off())); return }
+        alert?.let { showAlert(ctx, it); return }
+        when (p.effect) {
+            0 -> send(ctx, listOf(on(), rgb(p.lightColor), bright(p.brightness)))
+            -1 -> send(ctx, listOf(on(), bright(p.brightness), mode(breathCode(p.lightColor)), speed(p.speed)))
+            else -> send(ctx, listOf(on(), bright(p.brightness), mode(p.effect), speed(p.speed)))
+        }
+    }
+
+    // ------------------------------------------------------------------ avisos del motor
+
+    enum class Alert(val label: String) { CALIENTE("motor caliente"), VOLTAJE("voltaje bajo"), CHECK("check engine") }
+    @Volatile var alert: Alert? = null
+        private set
+
+    fun alertsOn(ctx: Context) = ThemeManager.prefs(ctx).getBoolean("lights_alerts", true)
+    fun setAlertsOn(ctx: Context, on: Boolean) = ThemeManager.prefs(ctx).edit().putBoolean("lights_alerts", on).apply()
+
+    private fun showAlert(ctx: Context, a: Alert) = when (a) {
+        Alert.CALIENTE -> send(ctx, listOf(on(), bright(100), mode(0x96), speed(70)))            // rojo parpadeando
+        Alert.VOLTAJE -> send(ctx, listOf(on(), bright(100), mode(0x99), speed(40)))             // amarillo parpadeando
+        Alert.CHECK -> send(ctx, listOf(on(), rgb(Color.rgb(255, 120, 0)), bright(90)))          // ámbar fijo
+    }
+
+    /** Lo llama el OBD2 con el estado actual; solo manda algo si cambia. */
+    fun setAlert(ctx: Context, a: Alert?) {
+        val app = ctx.applicationContext
+        val want = if (alertsOn(app)) a else null
+        if (want == alert) return
+        alert = want
+        if (address(app) == null) return
+        EventLog.add(app, "Luces: " + (want?.let { "aviso de ${it.label}" } ?: "aviso terminado, vuelve el color del perfil"))
+        if (want != null) showAlert(app, want)
+        else (Profiles.active(app) ?: Profiles.all(app).first()).let { applyProfile(app, it) }
+    }
+
     private fun on() = bytes(0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF)
     private fun off() = bytes(0x7E, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00, 0xEF)
     private fun rgb(c: Int) = bytes(0x7E, 0x00, 0x05, 0x03, Color.red(c), Color.green(c), Color.blue(c), 0x00, 0xEF)

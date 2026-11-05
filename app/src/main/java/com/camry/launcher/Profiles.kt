@@ -16,17 +16,21 @@ data class Profile(
     val lightColor: Int,
     val brightness: Int,
     val phoneAddr: String?,
-    val phoneName: String?
+    val phoneName: String?,
+    val effect: Int = 0,
+    val speed: Int = 50
 ) {
     fun json() = JSONObject().apply {
         put("id", id); put("name", name); put("accent", accent); put("themeId", themeId ?: "")
         put("light", lightColor); put("bright", brightness); put("phoneAddr", phoneAddr ?: ""); put("phoneName", phoneName ?: "")
+        put("effect", effect); put("speed", speed)
     }
     companion object {
         fun from(o: JSONObject) = Profile(
             o.getString("id"), o.getString("name"), o.getInt("accent"), o.optString("themeId").ifBlank { null },
             o.optInt("light", o.getInt("accent")), o.optInt("bright", 80),
-            o.optString("phoneAddr").ifBlank { null }, o.optString("phoneName").ifBlank { null }
+            o.optString("phoneAddr").ifBlank { null }, o.optString("phoneName").ifBlank { null },
+            o.optInt("effect", 0), o.optInt("speed", 50)
         )
     }
 }
@@ -75,7 +79,7 @@ object Profiles {
         val before = prefs(ctx).getString("profile_active", null)
         prefs(ctx).edit().putString("profile_active", p.id).apply()
         p.themeId?.let { ThemeManager.select(ctx, it) }
-        Lights.address(ctx)?.let { Lights.apply(ctx, p.lightColor, p.brightness) }
+        Lights.address(ctx)?.let { Lights.applyProfile(ctx, p) }
         EventLog.add(ctx, "Perfil ${p.name} activado ($reason)")
         android.os.Handler(android.os.Looper.getMainLooper()).post { onChange?.invoke() }
         return before != p.id
