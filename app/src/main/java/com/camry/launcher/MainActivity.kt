@@ -336,7 +336,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Mapa de la ciudad (OpenStreetMap + CARTO, sin llave ni costo) con tu ubicación. */
+    /** Mapa de la ciudad (OpenStreetMap, sin llave ni costo) con tu ubicación. */
     private fun buildMapCard(): View {
         val frame = FrameLayout(this).apply {
             background = Style.glass(skin, 24f * s)
@@ -345,19 +345,19 @@ class MainActivity : Activity() {
         }
 
         OsmConfig.getInstance().load(this, getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-        OsmConfig.getInstance().userAgentValue = packageName
+        OsmConfig.getInstance().userAgentValue = MAP_USER_AGENT
         OsmConfig.getInstance().osmdroidBasePath = File(cacheDir, "osmdroid")
         OsmConfig.getInstance().osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
+        // CARTO ahora pide llave: se borra su caché (cuadros con la marca "API KEY REQUIRED")
+        if (!prefs.getBoolean("carto_cache_cleared", false)) {
+            runCatching { File(cacheDir, "osmdroid").deleteRecursively() }
+            prefs.edit().putBoolean("carto_cache_cleared", true).apply()
+        }
 
-        val style = if (skin.isLight) "light_all" else "dark_all"
+        // Mapa de OpenStreetMap (gratis, sin llave). En temas oscuros se oscurece con un filtro de color.
         val source = XYTileSource(
-            "Carto-$style", 0, 19, 256, ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/$style/",
-                "https://b.basemaps.cartocdn.com/$style/",
-                "https://c.basemaps.cartocdn.com/$style/",
-                "https://d.basemaps.cartocdn.com/$style/"
-            )
+            "OSM-Camry", 0, 19, 256, ".png",
+            arrayOf("https://tile.openstreetmap.org/")
         )
         val start = startPoint()
         val mv = MapView(this)
@@ -367,6 +367,7 @@ class MainActivity : Activity() {
         mv.isTilesScaledToDpi = true
         mv.overlayManager.tilesOverlay.setLoadingBackgroundColor(skin.card)
         mv.overlayManager.tilesOverlay.setLoadingLineColor(skin.card)
+        if (!skin.isLight) mv.overlayManager.tilesOverlay.setColorFilter(darkMapFilter(skin.accent))
         mv.controller.setZoom(16.0)
         mv.controller.setCenter(start)
 
@@ -411,7 +412,7 @@ class MainActivity : Activity() {
                 intArrayOf(RoadView.alpha(skin.card, 0), RoadView.alpha(skin.card, 200))
             )
         }
-        bar.addView(label("© OpenStreetMap · © CARTO", 10f, skin.textDim).apply { gravity = Gravity.END; setPadding(0, 0, px(6f), 0) }, lp(MATCH, WRAP))
+        bar.addView(label("© colaboradores de OpenStreetMap", 10f, skin.textDim).apply { gravity = Gravity.END; setPadding(0, 0, px(6f), 0) }, lp(MATCH, WRAP))
         bar.addView(gap(6f))
         val buttons = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -467,11 +468,30 @@ class MainActivity : Activity() {
         runCatching { cm.registerDefaultNetworkCallback(cb); netCallback = cb }
     }
 
+    /** Convierte el mapa claro de OpenStreetMap en uno oscuro con un toque del color del tema. */
+    private fun darkMapFilter(accent: Int): android.graphics.ColorMatrixColorFilter {
+        val m = android.graphics.ColorMatrix(floatArrayOf(
+            -1f, 0f, 0f, 0f, 255f,
+            0f, -1f, 0f, 0f, 255f,
+            0f, 0f, -1f, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        m.postConcat(android.graphics.ColorMatrix().apply { setSaturation(0.15f) })
+        val r = Color.red(accent) / 255f; val g = Color.green(accent) / 255f; val b = Color.blue(accent) / 255f
+        m.postConcat(android.graphics.ColorMatrix(floatArrayOf(
+            0.62f, 0f, 0f, 0f, 6f + 14f * r,
+            0f, 0.66f, 0f, 0f, 8f + 14f * g,
+            0f, 0f, 0.74f, 0f, 12f + 18f * b,
+            0f, 0f, 0f, 1f, 0f
+        )))
+        return android.graphics.ColorMatrixColorFilter(m)
+    }
+
     /** Prueba si el estéreo puede descargar un cuadro del mapa. */
     private fun tileTest(): String = runCatching {
-        val c = java.net.URL("https://a.basemaps.cartocdn.com/dark_all/3/1/3.png").openConnection() as java.net.HttpURLConnection
+        val c = java.net.URL("https://tile.openstreetmap.org/3/1/3.png").openConnection() as java.net.HttpURLConnection
         c.connectTimeout = 8000; c.readTimeout = 8000
-        c.setRequestProperty("User-Agent", packageName)
+        c.setRequestProperty("User-Agent", MAP_USER_AGENT)
         val code = c.responseCode
         c.disconnect()
         if (code == 200) "descarga OK" else "el servidor respondió $code"
@@ -1328,6 +1348,7 @@ class MainActivity : Activity() {
     companion object {
         private const val APPLE_VENDOR_ID = 0x05AC
         private var greetedThisRun = false
+        private const val MAP_USER_AGENT = "CamryLauncher/1.0 (launcher personal para estereo de auto)"
         @Volatile var visible = false
         private const val REQ_AUDIO = 7
     }
