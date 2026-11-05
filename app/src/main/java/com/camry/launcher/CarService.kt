@@ -205,7 +205,7 @@ object WakeLogic {
         if (reasserts >= 3) return
         reasserts++
         handler.postDelayed({
-            if (!MainActivity.visible) {
+            if (!MainActivity.visible && Ui.ownScreens == 0) {
                 val ok = runCatching {
                     app.startActivity(Intent(app, MainActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); true
@@ -231,15 +231,8 @@ object WakeLogic {
         }
         // ¿Quién viene manejando? Se revisa qué teléfono se conecta en el primer minuto
         var profileFound = false
-        for (d in longArrayOf(1500L, 4000L, 8000L, 15_000L, 30_000L, 60_000L)) handler.postDelayed({
-            if (!profileFound) {
-                val phones = Profiles.connectedPhones()
-                if (phones.isNotEmpty()) EventLog.add(app, "Teléfonos conectados: " + phones.joinToString { (runCatching { it.name }.getOrNull() ?: "?") })
-                if (phones.any { Profiles.match(app, it.address, runCatching { it.name }.getOrNull()) != null }) {
-                    profileFound = true
-                    Profiles.detect(app, "encendido")
-                }
-            }
+        for (d in longArrayOf(1500L, 4000L, 8000L, 15_000L, 25_000L, 40_000L, 60_000L, 90_000L)) handler.postDelayed({
+            if (!profileFound) Profiles.detect(app, "encendido", force = true)?.let { profileFound = true }
         }, d)
         // si nadie se detectó, igual se ponen las luces del último perfil
         handler.postDelayed({
@@ -260,7 +253,7 @@ object WakeLogic {
         var tries = 0
         for (delay in longArrayOf(firstDelay, firstDelay + 2500L, firstDelay + 5500L, firstDelay + 9500L, firstDelay + 14_500L, firstDelay + 20_500L)) {
             handler.postDelayed({
-                if (!MainActivity.visible) {
+                if (!MainActivity.visible && Ui.ownScreens == 0) {
                     tries++
                     val ok = runCatching {
                         ctx.startActivity(

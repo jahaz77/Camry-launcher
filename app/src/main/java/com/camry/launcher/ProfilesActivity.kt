@@ -43,6 +43,9 @@ class ProfilesActivity : Activity() {
         cornerRadius = r * s; setColor(color); setStroke(1, stroke)
     }
 
+    override fun onStart() { super.onStart(); Ui.ownScreens++ }
+    override fun onStop() { Ui.ownScreens = (Ui.ownScreens - 1).coerceAtLeast(0); super.onStop() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val dm = resources.displayMetrics
@@ -61,11 +64,12 @@ class ProfilesActivity : Activity() {
         header.addView(text("Perfiles", 22f, skin.text))
         header.addView(gap(14f))
         val active = Profiles.active(this)
-        val phones = Profiles.connectedPhones().mapNotNull { runCatching { it.name }.getOrNull() }
+        val clues = StereoBt.clues(this)
+        val linked = Profiles.all(this).filter { p -> p.phoneName?.let { StereoBt.mentions(clues, it) } == true }
         val status = when {
             !Profiles.enabled(this) -> "Perfiles desactivados"
-            phones.isNotEmpty() -> "Conectado: " + phones.joinToString()
-            else -> "Ningún teléfono conectado al Bluetooth de Android"
+            linked.isNotEmpty() -> "Detectado: " + linked.joinToString { it.phoneName ?: it.name }
+            else -> "Sin teléfono vinculado detectado"
         }
         val badge = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -286,26 +290,42 @@ class ProfilesActivity : Activity() {
             }.setNegativeButton("Cancelar", null).show()
     }
 
+    /**
+     * Vincular el teléfono con el Bluetooth PROPIO del estéreo: se busca el nombre del iPhone
+     * en lo que ese Bluetooth deja visible (sus avisos y ajustes). Conviene hacerlo con el
+     * teléfono de esa persona conectado.
+     */
     private fun pickPhone(p: Profile) {
-        val bonded = runCatching { android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.bondedDevices?.toList().orEmpty() }.getOrDefault(emptyList())
-            .filter { d -> !(runCatching { d.name }.getOrNull() ?: "").uppercase().let { it.contains("OBD") || it.contains("ELM") || it.contains("ELK") } }
-        val connected = Profiles.connectedPhones().map { it.address }.toSet()
-        val labels = bonded.map { (runCatching { it.name }.getOrNull() ?: it.address) + if (it.address in connected) "  (conectado)" else "" }
+        if (MediaListener.instance == null) {
+            toast("Primero activa \"Camry Launcher (música)\" en la lista de acceso a notificaciones")
+            runCatching { startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+            return
+        }
+        val clues = StereoBt.clues(this).distinctBy { it.text }
+        val labels = clues.map { "“${it.text}”  ·  ${it.source}" }
         val items = (labels + "Escribir el nombre del teléfono…" + "Quitar teléfono").toTypedArray()
-        if (bonded.isEmpty()) toast("El Bluetooth de Android no tiene teléfonos emparejados. Puedes escribir el nombre como aparece en Diagnóstico (\"Bluetooth conectado: …\").")
-        dialog().setTitle("Teléfono de ${p.name}")
+        if (clues.isEmpty()) toast("No veo el nombre en el Bluetooth del estéreo. Conecta el iPhone de ${p.name} y vuelve a entrar, o escríbelo tal como sale en la pantalla del Bluetooth.")
+        dialog().setTitle("Con el iPhone de ${p.name} conectado, elige su nombre")
             .setItems(items) { _, w ->
                 when {
-                    w < bonded.size -> save(p.copy(phoneAddr = bonded[w].address, phoneName = runCatching { bonded[w].name }.getOrNull()))
-                    w == bonded.size -> {
-                        val input = EditText(this).apply { setText(p.phoneName ?: ""); hint = "iPhone de ${p.name}" }
-                        dialog().setTitle("Nombre del teléfono").setView(FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) })
-                            .setPositiveButton("Guardar") { _, _ -> save(p.copy(phoneAddr = null, phoneName = input.text.toString().trim().ifBlank { null })) }
-                            .setNegativeButton("Cancelar", null).show()
-                    }
+                    w < clues.size -> confirmName(p, clues[w].text)
+                    w == clues.size -> confirmName(p, p.phoneName ?: "")
                     else -> save(p.copy(phoneAddr = null, phoneName = null))
                 }
             }.setNegativeButton("Cancelar", null).show()
+    }
+
+    /** Deja editar el texto para quedarse solo con el nombre (p. ej. "Conectado a iPhone de Jahaz" → "iPhone de Jahaz"). */
+    private fun confirmName(p: Profile, initial: String) {
+        val input = EditText(this).apply { setText(initial); hint = "iPhone de ${p.name}"; setSelection(text.length) }
+        dialog().setTitle("Nombre del teléfono de ${p.name}")
+            .setMessage("Deja solo el nombre del teléfono, como aparece en la pantalla del Bluetooth del estéreo.")
+            .setView(FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) })
+            .setPositiveButton("Guardar") { _, _ ->
+                save(p.copy(phoneAddr = null, phoneName = input.text.toString().trim().ifBlank { null }))
+                Thread { Profiles.detect(this, "teléfono vinculado") }.start()
+            }
+            .setNegativeButton("Cancelar", null).show()
     }
 
     private fun lightsMenu() {

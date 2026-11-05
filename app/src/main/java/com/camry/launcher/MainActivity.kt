@@ -95,7 +95,7 @@ class MainActivity : Activity() {
         val dm = resources.displayMetrics
         s = min(maxOf(dm.widthPixels, dm.heightPixels) / 1024f, min(dm.widthPixels, dm.heightPixels) / 600f)
         setContentView(buildUi())
-        Profiles.onChange = { if (!isFinishing) recreate() }
+        Profiles.onChange = { if (visible && !isFinishing) recreate() }
         askPermissions()
         registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED).apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -288,6 +288,7 @@ class MainActivity : Activity() {
             override fun askDestination() = askText("¿A dónde vamos?", "Lugar o dirección", "") { if (it.isNotBlank()) toast(CarActions.navigate(this@MainActivity, it)) }
             override fun assistant() = openAssistant()
             override fun navigate(dest: String) { toast(CarActions.navigate(this@MainActivity, dest)) }
+            override fun places() = showPlaces()
         })
         val mp = mapPanel.view
         root.addView(mp, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -429,6 +430,19 @@ class MainActivity : Activity() {
             c.addView(b, lp(MATCH, WRAP))
             c.addView(gap(10f))
         }
+        val more = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(14f), 0, px(12f), 0)
+            background = glassButton(14f)
+            setOnClickListener { showPlaces() }
+        }
+        more.addView(icon(R.drawable.ic_pin, 18f, skin.textDim))
+        more.addView(gap(10f))
+        placesLabel = label("", 14f, skin.text)
+        more.addView(placesLabel, lp(0, WRAP, 1f))
+        more.addView(label("›", 18f, skin.textDim))
+        c.addView(more, lp(MATCH, px(44f)))
+        updatePlacesLabel()
         c.addView(spacer())
         val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val maps = LinearLayout(this).apply {
@@ -455,6 +469,20 @@ class MainActivity : Activity() {
         c.addView(buttons, lp(MATCH, WRAP))
         showTrips()
         return c
+    }
+
+    private var placesLabel: TextView? = null
+
+    private fun updatePlacesLabel() {
+        val n = Places.all(this).size
+        placesLabel?.text = if (n == 0) "Agregar más lugares" else "Otros lugares ($n)"
+    }
+
+    private fun showPlaces() {
+        Places.chooser(this, { dialog() }, { px(it) }, { dest -> toast(CarActions.navigate(this, dest)) }) {
+            updatePlacesLabel()
+            if (::mapPanel.isInitialized) mapPanel.rebuildChips()
+        }
     }
 
     private data class Quad(val a: String, val b: String, val c: Int, val d: Int)
@@ -847,7 +875,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))

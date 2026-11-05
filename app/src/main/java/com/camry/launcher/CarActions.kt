@@ -29,7 +29,7 @@ object CarActions {
         val target = when {
             key == "casa" || key.contains("mi casa") -> home(ctx).ifBlank { return "No hay dirección de casa guardada. Se configura en Opciones del launcher." }
             key == "trabajo" || key.contains("mi trabajo") || key == "oficina" -> work(ctx).ifBlank { return "No hay dirección de trabajo guardada. Se configura en Opciones del launcher." }
-            else -> d
+            else -> Places.find(ctx, d)?.target ?: d
         }
         val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(target)))
             .setPackage("com.google.android.apps.maps")

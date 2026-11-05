@@ -40,6 +40,7 @@ class MapPanel(
         fun askDestination()
         fun assistant()
         fun navigate(dest: String)
+        fun places()
     }
 
     private fun px(v: Float) = (v * s).roundToInt()
@@ -144,27 +145,10 @@ class MapPanel(
         search.addView(mic, lp(px(40f), px(40f)))
         top.addView(search, lp(px(420f), px(54f)))
         top.addView(gap(10f))
-        val chips = LinearLayout(act)
-        for ((key, label, color) in listOf(Triple("home", "Casa", skin.accent), Triple("work", "Trabajo", Color.rgb(138, 92, 255)), Triple("gas", "Gasolinera", Color.rgb(245, 185, 66)))) {
-            val c = LinearLayout(act).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(px(14f), 0, px(14f), 0)
-                background = glass(19f)
-                setOnClickListener { actions.navigate(if (key == "home") "casa" else if (key == "work") "trabajo" else "gasolinera") }
-            }
-            c.addView(View(act).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) } }, lp(px(9f), px(9f)))
-            c.addView(gap(8f))
-            c.addView(text(label, 14f, skin.text))
-            if (key != "gas") {
-                c.addView(gap(8f))
-                val t = text("", 14f, skin.textDim)
-                chipTimes[key] = t
-                c.addView(t)
-            }
-            chips.addView(c, lp(WRAP, px(38f)))
-            chips.addView(gap(8f))
-        }
-        top.addView(chips)
+        chipsRow = LinearLayout(act)
+        val scroll = android.widget.HorizontalScrollView(act).apply { isHorizontalScrollBarEnabled = false; addView(chipsRow) }
+        top.addView(scroll, lp(px(800f), WRAP))
+        rebuildChips()
         root.addView(top, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply { setMargins(px(20f), px(18f), 0, 0) })
 
         // ---- velocidad y brújula
@@ -282,6 +266,42 @@ class MapPanel(
                 }
             }.start()
         }
+    }
+
+    private lateinit var chipsRow: LinearLayout
+
+    private fun chip(label: String, color: Int, timeKey: String?, onClick: () -> Unit, onLong: (() -> Unit)? = null) {
+        val c = LinearLayout(act).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(14f), 0, px(14f), 0)
+            background = glass(19f)
+            setOnClickListener { onClick() }
+            onLong?.let { l -> setOnLongClickListener { l(); true } }
+        }
+        c.addView(View(act).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) } }, lp(px(9f), px(9f)))
+        c.addView(gap(8f))
+        c.addView(text(label, 14f, skin.text))
+        if (timeKey != null) {
+            c.addView(gap(8f))
+            val t = text(Commute.cached(timeKey)?.let { "${it.minutes} min" } ?: "", 14f, skin.textDim)
+            chipTimes[timeKey] = t
+            c.addView(t)
+        }
+        chipsRow.addView(c, lp(WRAP, px(38f)))
+        chipsRow.addView(gap(8f))
+    }
+
+    /** Casa, Trabajo, tus lugares guardados, Gasolinera y "+ Lugar". */
+    fun rebuildChips() {
+        if (!::chipsRow.isInitialized) return
+        chipsRow.removeAllViews()
+        chipTimes.clear()
+        chip("Casa", skin.accent, "home", { actions.navigate("casa") })
+        chip("Trabajo", Color.rgb(138, 92, 255), "work", { actions.navigate("trabajo") })
+        val cols = intArrayOf(Color.rgb(52, 211, 153), Color.rgb(33, 212, 253), Color.rgb(255, 79, 163), Color.rgb(255, 122, 89))
+        Places.all(act).forEachIndexed { i, p -> chip(p.name, cols[i % cols.size], null, { actions.navigate(p.name) }, { actions.places() }) }
+        chip("Gasolinera", Color.rgb(245, 185, 66), null, { actions.navigate("gasolinera") })
+        chip("＋ Lugar", skin.textDim, null, { actions.places() })
     }
 
     fun setEta(key: String, minutes: Int?) { chipTimes[key]?.text = minutes?.let { "$it min" } ?: "" }

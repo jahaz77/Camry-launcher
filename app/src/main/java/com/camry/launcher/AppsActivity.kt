@@ -21,6 +21,9 @@ import kotlin.math.roundToInt
 /** Cajón con todas las apps instaladas. */
 class AppsActivity : Activity() {
 
+    override fun onStart() { super.onStart(); Ui.ownScreens++ }
+    override fun onStop() { Ui.ownScreens = (Ui.ownScreens - 1).coerceAtLeast(0); super.onStop() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val skin = ThemeManager.current(this)

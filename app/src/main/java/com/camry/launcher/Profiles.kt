@@ -104,14 +104,30 @@ object Profiles {
         }
     }.getOrDefault(emptyList())
 
-    /** Revisa qué teléfono está conectado y activa su perfil. Devuelve el perfil activado (si cambió). */
-    fun detect(ctx: Context, reason: String): Profile? {
+    /**
+     * Revisa qué teléfono está conectado (primero el Bluetooth propio del estéreo, luego el de Android)
+     * y activa su perfil si no es el que ya está. Devuelve el perfil encontrado.
+     */
+    fun detect(ctx: Context, reason: String, force: Boolean = false): Profile? {
         if (!enabled(ctx)) return null
-        for (d in connectedPhones()) {
+        val list = all(ctx)
+        var found: Profile? = null
+        var how = ""
+        val clues = StereoBt.clues(ctx)
+        for (p in list) {
+            val n = p.phoneName ?: continue
+            if (StereoBt.mentions(clues, n)) { found = p; how = "Bluetooth del estéreo: $n"; break }
+        }
+        if (found == null) for (d in connectedPhones()) {
             val n = runCatching { d.name }.getOrNull()
             val p = match(ctx, d.address, n) ?: continue
-            return if (activate(ctx, p, "$reason: $n")) p else null
+            found = p; how = "Bluetooth de Android: $n"; break
         }
-        return null
+        val f = found ?: return null
+        if (force || active(ctx)?.id != f.id) activate(ctx, f, "$reason · $how")
+        return f
     }
 }
+
+/** Pantallas propias abiertas encima del inicio (Perfiles, Apps): no hay que "regresar al inicio" sobre ellas. */
+object Ui { @Volatile var ownScreens = 0 }
