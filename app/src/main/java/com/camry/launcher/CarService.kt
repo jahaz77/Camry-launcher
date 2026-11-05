@@ -51,7 +51,8 @@ class CarService : Service() {
                     @Suppress("DEPRECATION")
                     val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     val name = runCatching { dev?.name }.getOrNull() ?: "dispositivo"
-                    EventLog.add(context, "Bluetooth conectado: $name")
+                    EventLog.add(context, "Bluetooth conectado: $name (${dev?.address})")
+                    dev?.let { d -> Profiles.match(context, d.address, name)?.let { Profiles.activate(context, it, "se conectó $name") } }
                     // El adaptador OBD2 también es Bluetooth: ese no cuenta como encendido ni trae audio
                     if (!AppUtils.normalize(name).contains("obd")) {
                         WakeLogic.carStarted(context, "bluetooth $name", goHome = true)
@@ -228,6 +229,22 @@ object WakeLogic {
         } else if (goHome && prefs.getBoolean("wake_home", true)) {
             goHome(app, reason)
         }
+        // ¿Quién viene manejando? Se revisa qué teléfono se conecta en el primer minuto
+        var profileFound = false
+        for (d in longArrayOf(1500L, 4000L, 8000L, 15_000L, 30_000L, 60_000L)) handler.postDelayed({
+            if (!profileFound) {
+                val phones = Profiles.connectedPhones()
+                if (phones.isNotEmpty()) EventLog.add(app, "Teléfonos conectados: " + phones.joinToString { (runCatching { it.name }.getOrNull() ?: "?") })
+                if (phones.any { Profiles.match(app, it.address, runCatching { it.name }.getOrNull()) != null }) {
+                    profileFound = true
+                    Profiles.detect(app, "encendido")
+                }
+            }
+        }, d)
+        // si nadie se detectó, igual se ponen las luces del último perfil
+        handler.postDelayed({
+            if (!profileFound) Profiles.active(app)?.let { p -> Lights.address(app)?.let { Lights.apply(app, p.lightColor, p.brightness) } }
+        }, 20_000L)
         greet(app, reason, greetDelay)
         if (prefs.getBoolean("wake_music", true)) handler.postDelayed({ resumeMusic(app) }, greetDelay + 6000L)
     }
@@ -269,6 +286,8 @@ object WakeLogic {
         prefs.edit().putLong("last_greet_at", now).apply()
         EventLog.add(ctx, "Saludo programado por: $reason")
         handler.postDelayed({ Greeter.speak(ctx) { msg -> EventLog.add(ctx, "Saludo falló: $msg") } }, delay)
+        // recordatorio de mantenimiento, después del saludo
+        handler.postDelayed({ TripLog.dueText(ctx)?.let { Greeter.say(ctx, it) } }, delay + 9000L)
     }
 
     private fun resumeMusic(ctx: Context) {

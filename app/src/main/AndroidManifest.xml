@@ -39,6 +39,11 @@
         </activity>
 
         <activity
+            android:name=".ProfilesActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+
+        <activity
             android:name=".AppsActivity"
             android:exported="false"
             android:screenOrientation="landscape" />

@@ -57,7 +57,10 @@ object ThemeManager {
     fun current(ctx: Context): LauncherTheme {
         val all = loadAll(ctx)
         val id = prefs(ctx).getString(KEY_THEME, null)
-        return all.firstOrNull { it.id == id } ?: all.first()
+        val t = all.firstOrNull { it.id == id } ?: all.first()
+        // el color del perfil activo (Jahaz azul, Diana rosa) manda sobre el del tema
+        val p = runCatching { Profiles.active(ctx) }.getOrNull() ?: return t
+        return t.copy(accent = p.accent)
     }
 
     fun select(ctx: Context, id: String) {

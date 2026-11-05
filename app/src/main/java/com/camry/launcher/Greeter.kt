@@ -18,7 +18,7 @@ import java.util.Locale
  * 2) Si no, dice una de las frases (una por línea) con la voz del sistema.
  */
 object Greeter {
-    const val DEFAULT_TEXT = "{saludo}, Diana y Jahaz, ¿a dónde vamos hoy?"
+    const val DEFAULT_TEXT = "{saludo}, {nombre}, ¿a dónde vamos hoy?"
     private const val KEY_ON = "greet_on"
     private const val KEY_TEXT = "greet_text"
 
@@ -108,7 +108,7 @@ object Greeter {
         val pool = if (lines.size > 1) lines.filter { it != last } else lines
         val p = pool.randomOrNull() ?: DEFAULT_TEXT
         prefs.edit().putString("greet_last_text", p).apply()
-        return p.replace("{saludo}", slot.hello)
+        return p.replace("{saludo}", slot.hello).replace("{nombre}", Profiles.greetName(ctx))
     }
 
     fun speak(ctx: Context, onError: ((String) -> Unit)? = null) {

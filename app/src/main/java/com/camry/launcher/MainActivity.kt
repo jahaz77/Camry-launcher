@@ -80,11 +80,12 @@ class MainActivity : Activity() {
     private var controller: MediaController? = null
     private var mediaManager: MediaSessionManager? = null
     private var mediaNeedsAccess = false
-    private var map: MapView? = null
+    private lateinit var mapPanel: MapPanel
     private var mapLabel: TextView? = null
     @Volatile private var online = false
     private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
-    private var myMarker: Marker? = null
+    private val tripViews = HashMap<String, Array<View>>()
+    private var weatherText: TextView? = null
 
     // ---------------------------------------------------------------- ciclo de vida
 
@@ -94,6 +95,7 @@ class MainActivity : Activity() {
         val dm = resources.displayMetrics
         s = min(maxOf(dm.widthPixels, dm.heightPixels) / 1024f, min(dm.widthPixels, dm.heightPixels) / 600f)
         setContentView(buildUi())
+        Profiles.onChange = { if (!isFinishing) recreate() }
         askPermissions()
         registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED).apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -110,26 +112,28 @@ class MainActivity : Activity() {
             greetedThisRun = true
             val up = SystemClock.elapsedRealtime()
             EventLog.add(this, "Launcher iniciado (estéreo encendido hace ${up / 1000}s)")
+            if (prefs.getBoolean("startup_anim", true)) playStartup()
             // el saludo de arranque lo hace CarService
         }
     }
 
     override fun onResume() {
         super.onResume()
-        if (ThemeManager.current(this).id != skin.id) { recreate(); return }
-        map?.onResume()
+        ThemeManager.current(this).let { if (it.id != skin.id || it.accent != skin.accent) { recreate(); return } }
+        if (::mapPanel.isInitialized) mapPanel.map?.onResume()
         if (lastFix == 0L || SystemClock.elapsedRealtime() - lastFix > 10_000L) startLocation(force = locationManager != null)
         refreshIphoneStatus()
         if (mediaNeedsAccess) setupMedia()
     }
 
     override fun onPause() {
-        map?.onPause()
+        if (::mapPanel.isInitialized) mapPanel.map?.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        if (Profiles.onChange != null) Profiles.onChange = null
         runCatching { unregisterReceiver(usbReceiver) }
         runCatching { unregisterReceiver(screenReceiver) }
         Obd.unlisten(obdListener)
@@ -142,7 +146,7 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Launcher: el botón atrás no hace nada aquí")
-    override fun onBackPressed() { if (panelOpen) closePanel() /* si no, es la pantalla de inicio */ }
+    override fun onBackPressed() { if (page != 0) goPage(0) /* si no, es la pantalla de inicio */ }
 
     // ---------------------------------------------------------------- interfaz
 
@@ -206,7 +210,6 @@ class MainActivity : Activity() {
 
     private lateinit var homePage: View
     private lateinit var panel: VehiclePanel
-    private var panelOpen = false
 
     private fun buildUi(): View {
         val root = FrameLayout(this)
@@ -232,7 +235,7 @@ class MainActivity : Activity() {
         column.addView(gap(14f))
         column.addView(buildDock(), LinearLayout.LayoutParams(MATCH, px(74f)).apply { setMargins(px(40f), 0, px(40f), 0) })
 
-        row.addView(buildMapCard(), lp(px(270f), MATCH))
+        row.addView(buildCommuteCard(), lp(px(270f), MATCH))
         row.addView(gap(14f))
         val center = FrameLayout(this)
         road = RoadView(this, skin).apply {
@@ -251,6 +254,18 @@ class MainActivity : Activity() {
         }
         tab.addView(icon(R.drawable.ic_back, 14f, skin.textDim), FrameLayout.LayoutParams(px(14f), px(14f), Gravity.CENTER))
         center.addView(tab, FrameLayout.LayoutParams(px(22f), px(84f), Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = -px(8f) })
+        // pestaña para abrir el mapa completo (lado contrario)
+        val mapTab = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadii = floatArrayOf(0f, 0f, 11f * s, 11f * s, 11f * s, 11f * s, 0f, 0f)
+                setColor(Color.argb(15, 255, 255, 255))
+                setStroke(1, Color.argb(20, 255, 255, 255))
+            }
+            contentDescription = "Abrir mapa"
+            setOnClickListener { goPage(-1) }
+        }
+        mapTab.addView(icon(R.drawable.ic_back, 14f, skin.textDim).apply { rotation = 180f }, FrameLayout.LayoutParams(px(14f), px(14f), Gravity.CENTER))
+        center.addView(mapTab, FrameLayout.LayoutParams(px(22f), px(84f), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = -px(8f) })
         row.addView(center, lp(0, MATCH, 1f))
         row.addView(gap(14f))
 
@@ -265,7 +280,19 @@ class MainActivity : Activity() {
         val pv = panel.view
         root.addView(pv, FrameLayout.LayoutParams(MATCH, MATCH))
         pv.visibility = View.INVISIBLE
-        root.post { pv.translationX = root.width.toFloat() }
+        // mapa completo, fuera de la pantalla a la izquierda
+        mapPanel = MapPanel(this, skin, s, startPoint(), object : MapPanel.Actions {
+            override fun back() = goPage(0)
+            override fun openMaps() = this@MainActivity.openMaps()
+            override fun openCarPlay() = this@MainActivity.openCarPlay()
+            override fun askDestination() = askText("¿A dónde vamos?", "Lugar o dirección", "") { if (it.isNotBlank()) toast(CarActions.navigate(this@MainActivity, it)) }
+            override fun assistant() = openAssistant()
+            override fun navigate(dest: String) { toast(CarActions.navigate(this@MainActivity, dest)) }
+        })
+        val mp = mapPanel.view
+        root.addView(mp, FrameLayout.LayoutParams(MATCH, MATCH))
+        mp.visibility = View.INVISIBLE
+        root.post { pv.translationX = root.width.toFloat(); mp.translationX = -root.width.toFloat() }
         return root
     }
 
@@ -273,33 +300,45 @@ class MainActivity : Activity() {
 
     private val obdListener: (Obd.Snapshot) -> Unit = { snap -> handler.post { panel.update(snap); road.invalidate() } }
 
-    fun openPanel() {
-        if (panelOpen) return
-        panelOpen = true
-        val pv = panel.view
-        val w = (pv.parent as View).width.toFloat()
-        pv.translationX = w
-        pv.visibility = View.VISIBLE
-        pv.animate().translationX(0f).setDuration(260).start()
-        homePage.animate().translationX(-w * 0.25f).alpha(0.3f).setDuration(260).start()
-        panel.update(Obd.snap)
+    /** Página visible: -1 = mapa, 0 = inicio, 1 = Mi Camry. */
+    private var page = 0
+    private val panelOpen get() = page != 0
+
+    fun openPanel() = goPage(1)
+    fun closePanel() = goPage(0)
+
+    fun goPage(to: Int) {
+        if (to == page) return
+        val w = (homePage.parent as View).width.toFloat()
+        val old = page
+        page = to
+        fun viewOf(p: Int) = when (p) { -1 -> mapPanel.view; 1 -> panel.view; else -> null }
+        // la página que se va
+        viewOf(old)?.let { v -> v.animate().translationX(if (old < 0) -w else w).setDuration(240).withEndAction { if (page != old) v.visibility = View.INVISIBLE }.start() }
+        // la que llega
+        val v = viewOf(to)
+        if (v != null) {
+            if (old == 0) v.translationX = if (to < 0) -w else w
+            v.visibility = View.VISIBLE
+            v.animate().translationX(0f).setDuration(260).start()
+            homePage.animate().translationX(if (to < 0) w * 0.25f else -w * 0.25f).alpha(0.3f).setDuration(260).start()
+        } else {
+            homePage.animate().translationX(0f).alpha(1f).setDuration(240).start()
+        }
+        if (to == 1) panel.update(Obd.snap)
+        if (to == -1) { mapPanel.map?.onResume(); refreshCommute() }
     }
 
-    fun closePanel() {
-        if (!panelOpen) return
-        panelOpen = false
-        val pv = panel.view
-        val w = (pv.parent as View).width.toFloat()
-        pv.animate().translationX(w).setDuration(240).withEndAction { if (!panelOpen) pv.visibility = View.INVISIBLE }.start()
-        homePage.animate().translationX(0f).alpha(1f).setDuration(240).start()
-    }
+    private var flingStartX = 0f
 
     private val swipe by lazy {
         android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
             override fun onFling(e1: android.view.MotionEvent?, e2: android.view.MotionEvent, vx: Float, vy: Float): Boolean {
                 if (kotlin.math.abs(vx) < 1200f || kotlin.math.abs(vx) < kotlin.math.abs(vy) * 1.5f) return false
-                if (vx < 0 && !panelOpen) { openPanel(); return true }
-                if (vx > 0 && panelOpen) { closePanel(); return true }
+                // en el mapa, arrastrar mueve el mapa: solo se regresa deslizando desde el borde derecho
+                if (page == -1 && flingStartX < (homePage.parent as View).width - 90f * s) return false
+                if (vx < 0 && page < 1) { goPage(page + 1); return true }
+                if (vx > 0 && page > -1) { goPage(page - 1); return true }
                 return false
             }
         })
@@ -309,6 +348,7 @@ class MainActivity : Activity() {
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         lastTouchAt = SystemClock.elapsedRealtime()
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) flingStartX = ev.x
         runCatching { swipe.onTouchEvent(ev) }
         return super.dispatchTouchEvent(ev)
     }
@@ -338,89 +378,59 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Mapa de la ciudad (OpenStreetMap, sin llave ni costo) con tu ubicación. */
-    private fun buildMapCard(): View {
-        val frame = FrameLayout(this).apply {
-            background = Style.glass(skin, 24f * s)
-            outlineProvider = roundOutline(24f)
-            clipToOutline = true
-        }
-
-        OsmConfig.getInstance().load(this, getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-        OsmConfig.getInstance().userAgentValue = MAP_USER_AGENT
-        OsmConfig.getInstance().osmdroidBasePath = File(cacheDir, "osmdroid")
-        OsmConfig.getInstance().osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
-        // CARTO ahora pide llave: se borra su caché (cuadros con la marca "API KEY REQUIRED")
-        if (!prefs.getBoolean("carto_cache_cleared", false)) {
-            runCatching { File(cacheDir, "osmdroid").deleteRecursively() }
-            prefs.edit().putBoolean("carto_cache_cleared", true).apply()
-        }
-
-        // Mapa de OpenStreetMap (gratis, sin llave). En temas oscuros se oscurece con un filtro de color.
-        val source = XYTileSource(
-            "OSM-Camry", 0, 19, 256, ".png",
-            arrayOf("https://tile.openstreetmap.org/")
-        )
-        val start = startPoint()
-        val mv = MapView(this)
-        mv.setTileSource(source)
-        mv.setMultiTouchControls(false)
-        mv.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-        mv.isTilesScaledToDpi = true
-        mv.overlayManager.tilesOverlay.setLoadingBackgroundColor(skin.card)
-        mv.overlayManager.tilesOverlay.setLoadingLineColor(skin.card)
-        if (!skin.isLight) mv.overlayManager.tilesOverlay.setColorFilter(darkMapFilter(skin.accent))
-        mv.controller.setZoom(16.0)
-        mv.controller.setCenter(start)
-
-        val dot = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(skin.accent)
-            setStroke(px(3f), Color.WHITE)
-            setSize(px(22f), px(22f))
-        }
-        val mk = Marker(mv)
-        mk.icon = dot
-        mk.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-        mk.position = start
-        mk.setOnMarkerClickListener { _, _ -> true }
-        mv.overlays.add(mk)
-        map = mv
-        myMarker = mk
-        frame.addView(mv, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        // Tocar el mapa abre Maps (el mapa no se arrastra para no distraer al manejar)
-        frame.addView(View(this).apply { setOnClickListener { openMaps() } }, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        val header = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(18f), px(16f), px(18f), px(30f))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(RoadView.alpha(skin.card, 235), RoadView.alpha(skin.card, 0))
-            )
-        }
+    /** Tiempo a Casa y al Trabajo (reemplaza al mapa; el mapa completo está deslizando a la derecha). */
+    private fun buildCommuteCard(): View {
+        val c = card()
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         header.addView(View(this).apply { background = rounded(Color.rgb(52, 211, 153), 4f) }, lp(px(8f), px(8f)))
         header.addView(gap(8f))
-        mapLabel = overline("MAPA")
-        header.addView(mapLabel)
-        frame.addView(header, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
-
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(px(12f), px(20f), px(12f), px(12f))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(RoadView.alpha(skin.card, 0), RoadView.alpha(skin.card, 200))
-            )
+        mapLabel = overline("TRAYECTOS")
+        header.addView(mapLabel, lp(0, WRAP, 1f))
+        header.addView(label("Mapa ›", 12f, skin.textDim).apply { setOnClickListener { goPage(-1) } })
+        c.addView(header)
+        c.addView(gap(12f))
+        for ((key, name, iconRes, color) in listOf(
+            arrayOf("home", "Casa", R.drawable.ic_home, skin.accent),
+            arrayOf("work", "Trabajo", R.drawable.ic_work, Color.rgb(138, 92, 255))
+        ).map { Quad(it[0] as String, it[1] as String, it[2] as Int, it[3] as Int) }) {
+            val b = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(px(12f), px(12f), px(12f), px(12f))
+                background = glassButton(18f)
+                setOnClickListener { tripTap(key) }
+                setOnLongClickListener { editPlace(key); true }
+            }
+            val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            val sq = FrameLayout(this).apply { background = rounded(Style.alpha(color, 50), 12f) }
+            sq.addView(icon(iconRes, 20f, Style.lighten(color, 0.3f)), FrameLayout.LayoutParams(px(20f), px(20f), Gravity.CENTER))
+            top.addView(sq, lp(px(40f), px(40f)))
+            top.addView(gap(10f))
+            val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            texts.addView(label(name, 16f, skin.text, medium = true))
+            texts.addView(gap(3f))
+            val sub = label("", 12f, skin.textDim).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+            texts.addView(sub)
+            top.addView(texts, lp(0, WRAP, 1f))
+            val mins = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
+            val big = label("—", 30f, skin.text).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
+            mins.addView(big)
+            mins.addView(label("min", 11f, skin.textDim))
+            top.addView(mins)
+            b.addView(top)
+            b.addView(gap(10f))
+            val segs = LinearLayout(this)
+            val segViews = Array<View>(10) { View(this) }
+            segViews.forEachIndexed { i, v ->
+                if (i > 0) segs.addView(gap(3f))
+                segs.addView(v, lp(0, px(5f), 1f))
+            }
+            b.addView(segs, lp(MATCH, px(5f)))
+            tripViews[key] = arrayOf<View>(sub, big, *segViews)
+            c.addView(b, lp(MATCH, WRAP))
+            c.addView(gap(10f))
         }
-        bar.addView(label("© colaboradores de OpenStreetMap", 10f, skin.textDim).apply { gravity = Gravity.END; setPadding(0, 0, px(6f), 0) }, lp(MATCH, WRAP))
-        bar.addView(gap(6f))
-        val buttons = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(8f), px(8f), px(8f), px(8f))
-            background = Style.glass(skin, 18f * s, strong = true)
-        }
+        c.addView(spacer())
+        val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val maps = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             background = accentButton(13f)
@@ -433,7 +443,6 @@ class MainActivity : Activity() {
         maps.addView(label("Abrir Maps", 16f, Color.WHITE, medium = true))
         buttons.addView(maps, lp(0, px(50f), 1f))
         buttons.addView(gap(8f))
-        // CarPlay discreto, por si quieres navegar desde el iPhone
         val cp = FrameLayout(this).apply {
             background = glassButton(13f)
             contentDescription = "Abrir CarPlay"
@@ -443,9 +452,75 @@ class MainActivity : Activity() {
         cp.addView(icon(R.drawable.ic_carplay, 22f, skin.textDim), FrameLayout.LayoutParams(px(22f), px(22f), Gravity.CENTER))
         carplayStatus = label("CarPlay", 13f, skin.textDim)
         buttons.addView(cp, lp(px(50f), px(50f)))
-        bar.addView(buttons, lp(MATCH, WRAP))
-        frame.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
-        return frame
+        c.addView(buttons, lp(MATCH, WRAP))
+        showTrips()
+        return c
+    }
+
+    private data class Quad(val a: String, val b: String, val c: Int, val d: Int)
+
+    private fun tripTap(key: String) {
+        if (Commute.address(this, key).isBlank() && Commute.coords(this, key) == null) { editPlace(key); return }
+        toast(CarActions.navigate(this, if (key == "home") "casa" else "trabajo"))
+    }
+
+    private fun editPlace(key: String) {
+        val name = if (key == "home") "Casa" else "Trabajo"
+        dialog().setTitle(name)
+            .setItems(arrayOf("Estoy aquí: usar mi ubicación actual", "Escribir la dirección")) { _, w ->
+                if (w == 0) {
+                    val la = CarState.lat; val lo = CarState.lon
+                    if (la == null || lo == null) { toast("Todavía no tengo tu ubicación del GPS"); return@setItems }
+                    Commute.setCoords(this, key, la, lo)
+                    prefs.edit().putString(if (key == "home") "addr_home" else "addr_work", "%.6f,%.6f".format(java.util.Locale.US, la, lo)).apply()
+                    toast("$name guardado aquí")
+                    refreshCommute(force = true)
+                } else {
+                    askText("Dirección de ${name.lowercase()}", "Calle, número, colonia, ciudad", Commute.address(this, key)) { t ->
+                        Commute.setAddress(this, key, t) { ok -> runOnUiThread { toast(if (ok) "$name guardado" else "No encontré esa dirección; se usará el texto en Maps"); refreshCommute(force = true) } }
+                    }
+                }
+            }.setNegativeButton("Cancelar", null).show()
+    }
+
+    /** Pinta los tiempos que haya en caché. */
+    private fun showTrips() {
+        for (key in listOf("home", "work")) {
+            val v = tripViews[key] ?: continue
+            val sub = v[0] as TextView; val big = v[1] as TextView
+            val eta = Commute.cached(key)
+            val has = Commute.address(this, key).isNotBlank() || Commute.coords(this, key) != null
+            big.text = eta?.minutes?.toString() ?: "—"
+            sub.text = when {
+                !has -> "Mantén presionado para guardar"
+                eta == null -> if (online) "Calculando…" else "Sin internet"
+                else -> "%.1f km · ".format(java.util.Locale.US, eta.km) + when {
+                    eta.rush >= 1.4f -> "hora pico (estimado)"
+                    eta.rush > 1.05f -> "tráfico moderado (estimado)"
+                    else -> "fluido"
+                }
+            }
+            val lit = when { eta == null -> 0; eta.rush >= 1.4f -> 8; eta.rush > 1.05f -> 6; else -> 3 }
+            val col = when { eta == null -> skin.textDim; eta.rush >= 1.4f -> Color.rgb(255, 122, 89); eta.rush > 1.05f -> Color.rgb(245, 185, 66); else -> Color.rgb(52, 211, 153) }
+            for (i in 0 until 10) v[2 + i].background = rounded(if (i < lit) col else if (skin.isLight) Color.argb(20, 0, 0, 0) else Color.argb(20, 255, 255, 255), 2f)
+            if (::mapPanel.isInitialized) mapPanel.setEta(key, eta?.minutes)
+        }
+    }
+
+    private var lastCommuteAt = 0L
+    @Volatile private var commuteBusy = false
+
+    private fun refreshCommute(force: Boolean = false) {
+        val la = CarState.lat ?: return; val lo = CarState.lon ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (commuteBusy || !online || (!force && now - lastCommuteAt < 5 * 60_000L)) { showTrips(); return }
+        lastCommuteAt = now
+        commuteBusy = true
+        Thread {
+            for (k in listOf("home", "work")) runCatching { Commute.eta(this, k, la, lo) }
+            commuteBusy = false
+            runOnUiThread { showTrips() }
+        }.start()
     }
 
     /** Al recuperar internet, el mapa vuelve a pedir los cuadros que no pudo descargar. */
@@ -470,25 +545,6 @@ class MainActivity : Activity() {
         runCatching { cm.registerDefaultNetworkCallback(cb); netCallback = cb }
     }
 
-    /** Convierte el mapa claro de OpenStreetMap en uno oscuro con un toque del color del tema. */
-    private fun darkMapFilter(accent: Int): android.graphics.ColorMatrixColorFilter {
-        val m = android.graphics.ColorMatrix(floatArrayOf(
-            -1f, 0f, 0f, 0f, 255f,
-            0f, -1f, 0f, 0f, 255f,
-            0f, 0f, -1f, 0f, 255f,
-            0f, 0f, 0f, 1f, 0f
-        ))
-        m.postConcat(android.graphics.ColorMatrix().apply { setSaturation(0.15f) })
-        val r = Color.red(accent) / 255f; val g = Color.green(accent) / 255f; val b = Color.blue(accent) / 255f
-        m.postConcat(android.graphics.ColorMatrix(floatArrayOf(
-            0.62f, 0f, 0f, 0f, 6f + 14f * r,
-            0f, 0.66f, 0f, 0f, 8f + 14f * g,
-            0f, 0f, 0.74f, 0f, 12f + 18f * b,
-            0f, 0f, 0f, 1f, 0f
-        )))
-        return android.graphics.ColorMatrixColorFilter(m)
-    }
-
     /** Prueba si el estéreo puede descargar un cuadro del mapa. */
     private fun tileTest(): String = runCatching {
         val c = java.net.URL("https://tile.openstreetmap.org/3/1/3.png").openConnection() as java.net.HttpURLConnection
@@ -500,13 +556,13 @@ class MainActivity : Activity() {
     }.getOrElse { "no se pudo conectar (${it.javaClass.simpleName}: ${it.message})" }
 
     private fun updateMapLabel() {
-        mapLabel?.text = if (online) "MAPA" else "MAPA · SIN INTERNET"
+        mapLabel?.text = if (online) "TRAYECTOS" else "TRAYECTOS · SIN INTERNET"
     }
 
     private fun refreshMap() {
-        val mv = map ?: return
-        runCatching { mv.tileProvider.clearTileCache() }
-        mv.invalidate()
+        if (::mapPanel.isInitialized) mapPanel.refreshTiles()
+        refreshCommute()
+        refreshWeather()
     }
 
     private fun startPoint(): GeoPoint {
@@ -520,20 +576,10 @@ class MainActivity : Activity() {
         return GeoPoint(25.6866, -100.3161) // Monterrey
     }
 
-    private var lastZoom = 16.0
-
     private fun updateMap(l: Location, kmh: Float) {
-        val mv = map ?: return
-        val gp = GeoPoint(l.latitude, l.longitude)
-        myMarker?.position = gp
-        val z = when {
-            kmh > 80f -> 14.5
-            kmh > 40f -> 15.5
-            else -> 16.5
-        }
-        if (z != lastZoom) { lastZoom = z; mv.controller.zoomTo(z) }
-        mv.controller.animateTo(gp)
-        mv.invalidate()
+        if (::mapPanel.isInitialized) mapPanel.onLocation(l, kmh, road.heading)
+        if (lastCommuteAt == 0L) refreshCommute()
+        if (weatherAt == 0L) refreshWeather()
     }
 
     private fun buildClockCard(): View {
@@ -559,6 +605,9 @@ class MainActivity : Activity() {
             setTextColor(skin.textDim)
             includeFontPadding = false
         })
+        texts.addView(gap(8f))
+        weatherText = label("", 14f, skin.text)
+        texts.addView(weatherText)
         c.addView(texts, lp(0, WRAP, 1f))
 
         val btns = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -770,15 +819,18 @@ class MainActivity : Activity() {
             "Agregar audios de saludo",
             "Audios de saludo guardados (" + Greeter.audioFiles().size + ")",
             "Asistente: llave de la API" + if (Assistant.apiKey(this).isBlank()) " (falta)" else " (lista)",
-            "Asistente: dirección de casa",
-            "Asistente: dirección de trabajo",
+            "Dirección de casa",
+            "Dirección de trabajo",
             "Asistente: modelo (" + (if (Assistant.model(this) == Assistant.MODEL_FAST) "rápido" else "más listo") + ")",
             "Al encender, volver a esta pantalla: " + if (prefs.getBoolean("wake_home", true)) "Sí" else "No",
             "Al encender, reanudar la música: " + if (prefs.getBoolean("wake_music", true)) "Sí" else "No",
             "Permiso para volver a esta pantalla" + if (canGoHomeFromBackground()) " (listo)" else " (falta)",
             "OBD2: buscar / elegir adaptador" + (Obd.address(this)?.let { " (elegido)" } ?: ""),
             "Al encender, activar el audio Bluetooth: " + if (prefs.getBoolean("wake_bt_audio", true)) "Sí" else "No",
-            "Ajustes del estéreo"
+            "Ajustes del estéreo",
+            "Perfiles (Jahaz / Diana) y luces",
+            "Animación de inicio: " + if (prefs.getBoolean("startup_anim", true)) "Sí" else "No",
+            "Ver la animación de inicio"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -795,7 +847,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
@@ -807,8 +859,8 @@ class MainActivity : Activity() {
                     6 -> pickGreetingAudios()
                     7 -> showGreetingAudios()
                     8 -> askText("Llave de la API de Claude", "sk-ant-…", Assistant.apiKey(this), secret = true) { Assistant.setApiKey(this, it); toast("Llave guardada") }
-                    9 -> askText("Dirección de casa", "Calle, número, colonia, ciudad", CarActions.home(this)) { prefs.edit().putString("addr_home", it).apply(); toast("Casa guardada") }
-                    10 -> askText("Dirección de trabajo", "Calle, número, colonia, ciudad", CarActions.work(this)) { prefs.edit().putString("addr_work", it).apply(); toast("Trabajo guardado") }
+                    9 -> editPlace("home")
+                    10 -> editPlace("work")
                     11 -> {
                         val fast = Assistant.model(this) == Assistant.MODEL_FAST
                         Assistant.setModel(this, if (fast) Assistant.MODEL_SMART else Assistant.MODEL_FAST)
@@ -820,6 +872,9 @@ class MainActivity : Activity() {
                     15 -> chooseObdAdapter()
                     16 -> togglePref("wake_bt_audio", "Al encender se abrirá un momento la música Bluetooth", "Ya no se abrirá la música Bluetooth al encender")
                     17 -> openByLabel("Ajustes", Intent(Settings.ACTION_SETTINGS), "ajustes del coche", "configuracion del coche", "carsetting", "car setting")
+                    18 -> startActivity(Intent(this, ProfilesActivity::class.java))
+                    19 -> togglePref("startup_anim", "La animación saldrá al encender", "Sin animación al encender")
+                    20 -> playStartup()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -876,7 +931,7 @@ class MainActivity : Activity() {
         }
         val box = FrameLayout(this).apply { setPadding(px(24f), px(8f), px(24f), 0); addView(input) }
         dialog().setTitle("Frases del saludo")
-            .setMessage("Una por línea; sale una al azar.\n• {saludo} = Buenos días / Buenas tardes / Buenas noches\n• Empieza con \"mañana:\", \"tarde:\" o \"noche:\" para que salga solo a esa hora.")
+            .setMessage("Una por línea; sale una al azar.\n• {saludo} = Buenos días / Buenas tardes / Buenas noches\n• {nombre} = quien maneja (perfil activo)\n• Empieza con \"mañana:\", \"tarde:\" o \"noche:\" para que salga solo a esa hora.")
             .setView(box)
             .setPositiveButton("Guardar") { _, _ ->
                 val t = input.text.toString().trim()
@@ -1022,7 +1077,10 @@ class MainActivity : Activity() {
         visible = true
         val away = if (stoppedAt == 0L) 0L else SystemClock.elapsedRealtime() - stoppedAt
         if (stoppedAt != 0L) EventLog.add(this, "Launcher visible otra vez (${away / 1000}s oculto)")
-        if (stoppedAt != 0L && away > 60_000L) WakeLogic.carStarted(this, "launcher visible", goHome = false)
+        if (stoppedAt != 0L && away > 60_000L) {
+            WakeLogic.carStarted(this, "launcher visible", goHome = false)
+            if (prefs.getBoolean("startup_anim", true)) playStartup()
+        }
         stoppedAt = 0L
     }
 
@@ -1154,6 +1212,7 @@ class MainActivity : Activity() {
             CarState.lat = l.latitude
             CarState.lon = l.longitude
             road.heading = if (l.hasBearing() && kmh >= 5f) "Rumbo " + compass(l.bearing) else "GPS listo"
+            if (l.provider == LocationManager.GPS_PROVIDER) TripLog.gps(this@MainActivity, l)
             updateMap(l, kmh)
         }
 
@@ -1289,10 +1348,14 @@ class MainActivity : Activity() {
             musicArt.imageTintList = null
             musicArt.scaleType = ImageView.ScaleType.CENTER_CROP
             musicArt.setImageBitmap(art)
+            val ac = artColor(art) ?: skin.accent
+            Style.glow(musicArt, ac, 14f * s)
+            musicProgress.progressTintList = ColorStateList.valueOf(ac)
         } else {
             musicArt.imageTintList = ColorStateList.valueOf(skin.textDim)
             musicArt.scaleType = ImageView.ScaleType.CENTER
             musicArt.setImageResource(R.drawable.ic_music)
+            musicProgress.progressTintList = ColorStateList.valueOf(Style.lighten(skin.accent, 0.15f))
         }
         val playing = mc?.playbackState?.state == PlaybackState.STATE_PLAYING
         playBtn.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
@@ -1381,12 +1444,68 @@ class MainActivity : Activity() {
             }
             updateProgress()
             tickCount++
-            if (tickCount % 20 == 0 && online) map?.invalidate()
+            if (tickCount % 60 == 0) refreshCommute()
+            if (tickCount % 1800 == 0 && tickCount > 0) refreshWeather()
             handler.postDelayed(this, 1000L)
         }
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+
+    // ---------------------------------------------------------------- animación de arranque
+
+    private var startup: StartupView? = null
+
+    private fun playStartup() {
+        if (startup != null) return
+        val root = window.decorView as? ViewGroup ?: return
+        val v = StartupView(this, skin.accent) { startup = null }
+        startup = v
+        root.addView(v, ViewGroup.LayoutParams(MATCH, MATCH))
+        v.play()
+    }
+
+    // ---------------------------------------------------------------- clima (Open-Meteo, sin llave)
+
+    private var weatherAt = 0L
+
+    private fun refreshWeather() {
+        val la = CarState.lat ?: 25.6866; val lo = CarState.lon ?: -100.3161
+        if (!online) return
+        weatherAt = SystemClock.elapsedRealtime()
+        Thread {
+            val r = runCatching {
+                val c = java.net.URL("https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo&current=temperature_2m,weather_code&timezone=auto")
+                    .openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 8000; c.readTimeout = 8000
+                val o = org.json.JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getJSONObject("current")
+                c.disconnect()
+                o.getDouble("temperature_2m").roundToInt() to o.getInt("weather_code")
+            }.getOrNull() ?: return@Thread
+            val desc = when (r.second) {
+                0 -> "Despejado"; 1, 2 -> "Medio nublado"; 3 -> "Nublado"; 45, 48 -> "Neblina"
+                in 51..57 -> "Llovizna"; in 61..67, in 80..82 -> "Lluvia"; in 71..77 -> "Nieve"; in 95..99 -> "Tormenta"
+                else -> ""
+            }
+            runOnUiThread { weatherText?.text = "${r.first}°" + if (desc.isNotEmpty()) " · $desc" else "" }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------- color de la portada
+
+    /** Color más vivo de la portada del disco, para el brillo de la tarjeta de música. */
+    private fun artColor(b: Bitmap): Int? = runCatching {
+        val sm = Bitmap.createScaledBitmap(b, 12, 12, true)
+        var best: Int? = null; var bestScore = 0f
+        val hsv = FloatArray(3)
+        for (x in 0 until 12) for (y in 0 until 12) {
+            val c = sm.getPixel(x, y)
+            Color.colorToHSV(c, hsv)
+            val score = hsv[1] * (if (hsv[2] in 0.25f..0.95f) hsv[2] else 0f)
+            if (score > bestScore) { bestScore = score; best = c }
+        }
+        if (bestScore < 0.15f) null else best?.let { c -> Color.colorToHSV(c, hsv); hsv[1] = hsv[1].coerceAtLeast(0.55f); hsv[2] = hsv[2].coerceAtLeast(0.75f); Color.HSVToColor(hsv) }
+    }.getOrNull()
 
     companion object {
         private const val APPLE_VENDOR_ID = 0x05AC

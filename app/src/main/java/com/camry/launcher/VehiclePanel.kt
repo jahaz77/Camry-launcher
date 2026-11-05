@@ -96,8 +96,10 @@ class VehiclePanel(
         val titles = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
         titles.addView(overline("TOYOTA CAMRY 2008").apply { letterSpacing = 0.2f })
         titles.addView(gap(2f))
-        titles.addView(text("Estado en tiempo real", 22f, skin.text))
+        titles.addView(text("Mi Camry", 22f, skin.text))
         header.addView(titles, lp(0, WRAP, 1f))
+        header.addView(tabs(), lp(WRAP, px(42f)))
+        header.addView(gap(14f))
         val chip = LinearLayout(act).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(px(16f), 0, px(16f), 0)
@@ -115,7 +117,14 @@ class VehiclePanel(
 
         // ---- cuerpo
         val body = LinearLayout(act)
-        root.addView(body, lp(MATCH, 0, 1f))
+        val pages = FrameLayout(act)
+        pages.addView(body, FrameLayout.LayoutParams(MATCH, MATCH))
+        perf = PerfPages(act, skin, s)
+        pageViews = listOf(body, perf.rendimiento, perf.mantenimiento)
+        pages.addView(perf.rendimiento, FrameLayout.LayoutParams(MATCH, MATCH))
+        pages.addView(perf.mantenimiento, FrameLayout.LayoutParams(MATCH, MATCH))
+        root.addView(pages, lp(MATCH, 0, 1f))
+        showPage(0)
 
         val left = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
         body.addView(left, lp(0, MATCH, 1f))
@@ -232,6 +241,40 @@ class VehiclePanel(
 
         update(Obd.snap)
         return root
+    }
+
+    private lateinit var perf: PerfPages
+    private var pageViews: List<View> = emptyList()
+    private val tabViews = mutableListOf<TextView>()
+    var page = 0
+        private set
+
+    private fun tabs(): View {
+        val box = LinearLayout(act).apply {
+            setPadding(px(4f), px(4f), px(4f), px(4f))
+            background = pill(Color.argb(13, 255, 255, 255))
+        }
+        listOf("En vivo", "Rendimiento", "Mantenimiento").forEachIndexed { i, name ->
+            val t = text(name, 14f, skin.textDim).apply {
+                gravity = Gravity.CENTER
+                setPadding(px(16f), 0, px(16f), 0)
+                setOnClickListener { showPage(i) }
+            }
+            tabViews.add(t)
+            box.addView(t, lp(WRAP, MATCH))
+        }
+        return box
+    }
+
+    fun showPage(i: Int) {
+        page = i
+        pageViews.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+        tabViews.forEachIndexed { k, t ->
+            t.setTextColor(if (k == i) Color.WHITE else skin.textDim)
+            t.typeface = Typeface.create(if (k == i) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+            t.background = if (k == i) Style.accentFill(skin, 999f) else null
+        }
+        if (i > 0 && ::perf.isInitialized) perf.refresh()
     }
 
     private fun pill(color: Int, r: Float = 999f) = GradientDrawable().apply {

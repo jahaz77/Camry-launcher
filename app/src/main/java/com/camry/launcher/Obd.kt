@@ -198,6 +198,7 @@ object Obd {
             val lph = maf?.let { it * 3600.0 / (14.7 * 745.0) }
             if (spd != null) dist += spd * dtH
             if (lph != null) fuel += lph * dtH
+            runCatching { TripLog.obd(app, spd, lph, dtH) }
             val inst = if (lph != null && spd != null && spd > 3 && lph > 0.05) (spd / lph).coerceAtMost(60.0).toFloat() else null
             val avg = if (fuel > 0.01) (dist / fuel).toFloat() else null
 
