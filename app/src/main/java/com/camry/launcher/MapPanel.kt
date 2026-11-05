@@ -149,7 +149,7 @@ class MapPanel(
         val scroll = android.widget.HorizontalScrollView(act).apply { isHorizontalScrollBarEnabled = false; addView(chipsRow) }
         top.addView(scroll, lp(px(800f), WRAP))
         rebuildChips()
-        root.addView(top, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply { setMargins(px(20f), px(18f), 0, 0) })
+        root.addView(top, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply { setMargins(px(20f), px(TOP), 0, 0) })
 
         // ---- velocidad y brújula
         val right = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
@@ -159,16 +159,18 @@ class MapPanel(
         }
         Style.glow(sp, skin.accent, 8f * s)
         speedText = text("0", 34f, skin.text, light = true)
-        sp.addView(speedText)
-        sp.addView(text("KM/H", 10f, skin.textDim).apply { letterSpacing = 0.2f })
+        speedText.gravity = Gravity.CENTER
+        sp.addView(speedText, lp(MATCH, WRAP))
+        sp.addView(gap(2f))
+        sp.addView(text("KM/H", 10f, skin.textDim).apply { letterSpacing = 0.2f; gravity = Gravity.CENTER }, lp(MATCH, WRAP))
         right.addView(sp, lp(px(92f), px(92f)))
         right.addView(gap(10f))
         compassText = text("N", 12f, Color.rgb(255, 90, 95), medium = true).apply {
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(glassBg) }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(glassBg); setStroke(1, Color.argb(40, 255, 255, 255)) }
         }
         right.addView(compassText, lp(px(48f), px(48f)))
-        root.addView(right, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply { setMargins(0, px(18f), px(36f), 0) })
+        right.addView(gap(16f))
 
         // ---- zoom y centrar
         val zoom = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
@@ -188,7 +190,8 @@ class MapPanel(
         }
         center.addView(icon(R.drawable.ic_nav, 20f, skin.accent), FrameLayout.LayoutParams(px(20f), px(20f), Gravity.CENTER))
         zoom.addView(center, lp(px(50f), px(50f)))
-        root.addView(zoom, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL).apply { setMargins(0, px(40f), px(36f), 0) })
+        right.addView(zoom)
+        root.addView(right, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply { setMargins(0, px(TOP), px(48f), 0) })
 
         // ---- barra inferior
         val bar = LinearLayout(act).apply {
@@ -226,7 +229,7 @@ class MapPanel(
         cp.addView(gap(8f))
         cp.addView(text("CarPlay", 15f, skin.textDim))
         bar.addView(cp, lp(WRAP, px(52f)))
-        root.addView(bar, FrameLayout.LayoutParams(MATCH, px(78f), Gravity.BOTTOM).apply { setMargins(px(20f), 0, px(36f), px(18f)) })
+        root.addView(bar, FrameLayout.LayoutParams(MATCH, px(78f), Gravity.BOTTOM).apply { setMargins(px(20f), 0, px(48f), px(18f)) })
         root.addView(text("© colaboradores de OpenStreetMap", 10f, skin.textDim), FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { setMargins(px(26f), 0, 0, px(102f)) })
 
         // ---- pestaña para volver al inicio
@@ -313,6 +316,9 @@ class MapPanel(
     }
 
     companion object {
+        /** Margen de arriba: la barra de estado del estéreo (voltaje, Bluetooth, hora) se dibuja encima. */
+        private const val TOP = 54f
+
         /** Convierte el mapa claro de OpenStreetMap en uno oscuro con un toque del color del tema. */
         fun darkMapFilter(accent: Int): android.graphics.ColorMatrixColorFilter {
             val m = android.graphics.ColorMatrix(floatArrayOf(
