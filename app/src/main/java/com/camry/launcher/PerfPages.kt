@@ -75,25 +75,25 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
         h.addView(trendText)
         c.addView(h)
         c.addView(gap(14f))
-        val nums = LinearLayout(act).apply { gravity = Gravity.BOTTOM }
-        val big = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-        kmplText = text("—", 60f, skin.text, light = true)
-        big.addView(kmplText)
-        big.addView(gap(6f))
-        big.addView(text("km/L promedio", 14f, skin.textDim))
-        nums.addView(big)
-        nums.addView(gap(28f))
-        fun stat(sub: String): Pair<LinearLayout, TextView> {
-            val l = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-            val v = text("—", 26f, skin.text)
-            l.addView(v); l.addView(gap(4f)); l.addView(text(sub, 13f, skin.textDim))
-            return l to v
+        // Fila de números: medidas fijas para que el estéreo no las recorte
+        val nums = LinearLayout(act).apply { gravity = Gravity.BOTTOM; isBaselineAligned = false }
+        fun col(value: TextView, sub: String, w: Float): Pair<LinearLayout, TextView> {
+            val l = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL; isBaselineAligned = false }
+            value.setSingleLine(true)
+            l.addView(value, lp(WRAP, WRAP))
+            l.addView(gap(5f))
+            val st = text(sub, 13f, skin.textDim).apply { setSingleLine(true) }
+            l.addView(st, lp(WRAP, WRAP))
+            nums.addView(l, lp(px(w), WRAP))
+            return l to st
         }
-        val (a, av) = stat("por km"); costKmText = av
-        nums.addView(a); nums.addView(gap(28f))
-        val (b, bv) = stat("gastado"); spentText = bv; spentSub = b.getChildAt(2) as TextView
-        nums.addView(b)
-        c.addView(nums)
+        kmplText = text("—", 56f, skin.text, light = true)
+        col(kmplText, "km/L promedio", 170f)
+        costKmText = text("—", 26f, skin.text)
+        col(costKmText, "por km", 120f)
+        spentText = text("—", 26f, skin.text)
+        spentSub = col(spentText, "gastado", 220f).second
+        c.addView(nums, lp(MATCH, WRAP))
         c.addView(gap(12f))
         bars = BarsView(act, skin, s)
         c.addView(bars, lp(MATCH, 0, 1f))
