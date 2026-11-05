@@ -317,7 +317,7 @@ class MainActivity : Activity() {
     fun chooseObdAdapter() {
         val devs = Obd.bonded()
         if (devs.isEmpty()) {
-            toast("Primero empareja el adaptador OBD2 en los ajustes de Bluetooth (PIN 1234 o 0000)")
+            ObdPairing(this) { dialog() }.start()
             return
         }
         val current = Obd.address(this)
@@ -327,7 +327,7 @@ class MainActivity : Activity() {
                 Obd.setAddress(this, devs[which].address)
                 toast("Conectando a ${devs[which].name}…")
             }
-            .setNeutralButton("Ninguno") { _, _ -> Obd.setAddress(this, null) }
+            .setNeutralButton("Buscar otro") { _, _ -> ObdPairing(this) { dialog() }.start() }
             .setNegativeButton("Cancelar", null)
             .show()
     }
@@ -776,7 +776,7 @@ class MainActivity : Activity() {
             "Al encender, volver a esta pantalla: " + if (prefs.getBoolean("wake_home", true)) "Sí" else "No",
             "Al encender, reanudar la música: " + if (prefs.getBoolean("wake_music", true)) "Sí" else "No",
             "Permiso para volver a esta pantalla" + if (canGoHomeFromBackground()) " (listo)" else " (falta)",
-            "OBD2: elegir adaptador" + (Obd.address(this)?.let { " (elegido)" } ?: ""),
+            "OBD2: buscar / elegir adaptador" + (Obd.address(this)?.let { " (elegido)" } ?: ""),
             "Al encender, activar el audio Bluetooth: " + if (prefs.getBoolean("wake_bt_audio", true)) "Sí" else "No",
             "Ajustes del estéreo"
         )
@@ -795,7 +795,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
