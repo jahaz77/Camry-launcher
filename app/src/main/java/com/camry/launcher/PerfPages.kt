@@ -58,6 +58,7 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
     // ================================================================== rendimiento
 
     private lateinit var kmplText: TextView
+    private lateinit var kmplSub: TextView
     private lateinit var trendText: TextView
     private lateinit var costKmText: TextView
     private lateinit var spentText: TextView
@@ -88,7 +89,7 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
             return l to st
         }
         kmplText = text("—", 56f, skin.text, light = true)
-        col(kmplText, "km/L promedio", 170f)
+        kmplSub = col(kmplText, "km/L promedio", 170f).second
         costKmText = text("—", 26f, skin.text)
         col(costKmText, "por km", 120f)
         spentText = text("—", 26f, skin.text)
@@ -99,7 +100,7 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
         c.addView(bars, lp(MATCH, 0, 1f))
         c.addView(gap(10f))
         val foot = LinearLayout(act).apply { gravity = Gravity.CENTER_VERTICAL }
-        foot.addView(text("Con OBD2 se mide la gasolina real; sin él solo los km", 12f, skin.textDim), lp(0, WRAP, 1f))
+        foot.addView(text("De fábrica: ciudad ${Engine.CITY} · carretera ${Engine.HWY} · - - - ${Engine.COMB}", 12f, skin.textDim), lp(0, WRAP, 1f))
         fuelText = text("", 13f, skin.text).apply {
             setPadding(px(12f), px(7f), px(12f), px(7f))
             background = GradientDrawable().apply { cornerRadius = 12f * s; setColor(Color.argb(16, 255, 255, 255)) }
@@ -174,6 +175,11 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
         val sum = TripLog.summary(ctx)
         val price = TripLog.fuelPrice(ctx)
         kmplText.text = sum.kmpl?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
+        sum.kmpl?.let { k ->
+            val r = Engine.rate(k, null)
+            kmplSub.text = "km/L · ${r.label}"
+            kmplSub.setTextColor(r.color(skin))
+        } ?: run { kmplSub.text = "km/L promedio"; kmplSub.setTextColor(skin.textDim) }
         costKmText.text = sum.kmpl?.let { "$" + String.format(Locale.US, "%.2f", price / it) } ?: "—"
         val liters = sum.liters.takeIf { it > 0.1 } ?: sum.kmpl?.let { sum.km / it }
         spentText.text = liters?.let { money(it * price) } ?: "—"
@@ -219,7 +225,7 @@ class PerfPages(private val act: Activity, private val skin: LauncherTheme, priv
             mid.addView(text(String.format(Locale.US, "%.1f km · %d min · %d km/h prom.", t.km, t.minutes, t.avgSpeed), 12f, skin.textDim))
             r.addView(mid, lp(0, WRAP, 1f))
             val k = t.kmpl
-            val col = when { k == null -> skin.textDim; k >= 11 -> green; k >= 9 -> skin.text; k >= 8 -> amber; else -> orange }
+            val col = k?.let { Engine.rate(it, t.avgSpeed).color(skin) } ?: skin.textDim
             val right = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
             right.addView(text(k?.let { String.format(Locale.US, "%.1f", it) } ?: "—", 18f, col))
             right.addView(text("km/L", 11f, skin.textDim))
@@ -332,6 +338,11 @@ class BarsView(ctx: Context, private val skin: LauncherTheme, private val s: Flo
         val avg = data.mapNotNull { it.second }.average().takeIf { !it.isNaN() }
         p.color = if (skin.isLight) Color.argb(25, 0, 0, 0) else Color.argb(20, 255, 255, 255)
         c.drawRect(0f, chartH - 1f, w, chartH, p)
+        // línea de referencia: rendimiento combinado de fábrica
+        val ry = chartH - (Engine.COMB / max * chartH).toFloat()
+        p.color = if (skin.isLight) Color.argb(90, 0, 0, 0) else Color.argb(90, 255, 255, 255)
+        var dx = 0f
+        while (dx < w) { c.drawRect(dx, ry, dx + 8f * s, ry + 1.5f * s, p); dx += 14f * s }
         data.forEachIndexed { i, (day, v) ->
             val x = i * (bw + gapW)
             val top: Float
@@ -340,9 +351,8 @@ class BarsView(ctx: Context, private val skin: LauncherTheme, private val s: Flo
                 p.shader = null; p.color = if (skin.isLight) Color.argb(25, 0, 0, 0) else Color.argb(22, 255, 255, 255)
             } else {
                 top = chartH - (v / max * chartH).toFloat()
-                val good = avg != null && v >= avg * 1.15
-                val c1 = if (good) Color.rgb(110, 231, 183) else Style.lighten(skin.accent, 0.3f)
-                val c2 = if (good) Color.rgb(52, 211, 153) else skin.accent
+                val c2 = Engine.rate(v, null).color(skin)
+                val c1 = Style.lighten(c2, 0.3f)
                 p.shader = LinearGradient(0f, top, 0f, chartH, c1, c2, Shader.TileMode.CLAMP)
             }
             c.drawRoundRect(RectF(x, top, x + bw, chartH), 5f * s, 5f * s, p)
@@ -354,5 +364,31 @@ class BarsView(ctx: Context, private val skin: LauncherTheme, private val s: Flo
                 c.drawText(String.format(Locale.US, "%.1f", v), x + bw / 2f, top - 4f * s, tp)
             }
         }
+    }
+}
+
+/** Rendimiento de fábrica del motor (EPA 2008) para comparar. */
+object Engine {
+    const val NAME = "2AZ-FE 2.4 L"
+    const val CITY = 8.9
+    const val HWY = 13.2
+    const val COMB = 10.6
+
+    enum class Rate(val label: String) { EXCELENTE("excelente"), BUENO("bueno"), REGULAR("regular"), BAJO("bajo");
+        fun color(skin: LauncherTheme) = when (this) {
+            EXCELENTE -> Color.rgb(52, 211, 153); BUENO -> skin.accent; REGULAR -> Color.rgb(245, 185, 66); BAJO -> Color.rgb(255, 122, 89)
+        }
+    }
+
+    /** Lo esperado según la velocidad promedio: ~25 km/h es ciudad pura, ~80 km/h carretera. */
+    fun expected(avgSpeed: Int?): Double {
+        if (avgSpeed == null) return COMB
+        val t = ((avgSpeed - 25.0) / 55.0).coerceIn(0.0, 1.0)
+        return CITY + (HWY - CITY) * t
+    }
+
+    fun rate(kmpl: Double, avgSpeed: Int?): Rate {
+        val r = kmpl / expected(avgSpeed)
+        return when { r >= 1.05 -> Rate.EXCELENTE; r >= 0.92 -> Rate.BUENO; r >= 0.8 -> Rate.REGULAR; else -> Rate.BAJO }
     }
 }
