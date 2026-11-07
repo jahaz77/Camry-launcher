@@ -889,7 +889,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this) + "\n\nÚLTIMO ERROR:\n" + (CrashLog.last(this) ?: "ninguno"))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nMÚSICA: " + musicReport() + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this) + "\n\nÚLTIMO ERROR:\n" + (CrashLog.last(this) ?: "ninguno"))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
@@ -1350,8 +1350,52 @@ class MainActivity : Activity() {
         override fun onSessionDestroyed() = bindController(null)
     }
 
-    private fun pickController(list: List<MediaController>?): MediaController? =
-        list?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: list?.firstOrNull()
+    private fun pickController(list: List<MediaController>?): MediaController? {
+        val all = (list.orEmpty() + notificationControllers()).distinctBy { it.sessionToken }
+        return all.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: all.firstOrNull { it.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.isNotBlank() == true }
+            ?: all.firstOrNull()
+    }
+
+    /** Sesiones de música que vienen adentro de las notificaciones (las apps del estéreo a veces solo las ponen ahí). */
+    private fun notificationControllers(): List<MediaController> = runCatching {
+        MediaListener.instance?.activeNotifications.orEmpty().mapNotNull { n ->
+            val tok = n.notification.extras?.getParcelable<android.media.session.MediaSession.Token>(android.app.Notification.EXTRA_MEDIA_SESSION)
+            tok?.let { runCatching { MediaController(this, it) }.getOrNull() }
+        }
+    }.getOrDefault(emptyList())
+
+    /** Texto de la notificación de música cuando no hay sesión (título y artista). */
+    private fun notificationSong(): Triple<String, String, String>? = runCatching {
+        MediaListener.instance?.activeNotifications.orEmpty().firstNotNullOfOrNull { n ->
+            if (n.packageName == packageName) return@firstNotNullOfOrNull null
+            val pkg = n.packageName.lowercase()
+            val musical = n.notification.category == android.app.Notification.CATEGORY_TRANSPORT ||
+                listOf("music", "bt", "blue", "audio", "player", "spotify", "carplay", "tlink").any { pkg.contains(it) }
+            if (!musical) return@firstNotNullOfOrNull null
+            val ex = n.notification.extras
+            val t = ex?.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()?.trim()
+            val a = ex?.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()?.trim()
+            if (t.isNullOrBlank()) null else Triple(t, a ?: "", n.packageName)
+        }
+    }.getOrNull()
+
+    private fun musicReport(): String = runCatching {
+        val mm = mediaManager ?: return@runCatching "sin acceso a la música"
+        val ss = mm.getActiveSessions(ComponentName(this, MediaListener::class.java))
+        val st = { c: MediaController -> when (c.playbackState?.state) { PlaybackState.STATE_PLAYING -> "sonando"; PlaybackState.STATE_PAUSED -> "en pausa"; else -> "detenida" } }
+        (if (ss.isEmpty()) "ninguna app de música activa" else ss.joinToString { appName(it.packageName) + " (" + st(it) + ")" }) +
+            notificationControllers().takeIf { it.isNotEmpty() }?.let { " · en avisos: " + it.joinToString { c -> appName(c.packageName) } }.orEmpty() +
+            " · mostrando: " + (controller?.let { appName(it.packageName) } ?: "nada")
+    }.getOrDefault("?")
+
+    private fun recheckMedia() {
+        val mm = mediaManager ?: return
+        val cur = controller
+        if (cur != null && cur.playbackState?.state == PlaybackState.STATE_PLAYING) return
+        val best = runCatching { pickController(mm.getActiveSessions(ComponentName(this, MediaListener::class.java))) }.getOrNull()
+        if (best?.sessionToken != cur?.sessionToken) bindController(best) else if (cur == null) updateMusic()
+    }
 
     private fun setupMedia() {
         val mm = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -1379,11 +1423,13 @@ class MainActivity : Activity() {
         if (mediaNeedsAccess) return
         val mc = controller
         val md = mc?.metadata
-        musicTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: "Sin reproducción"
+        val fromNotif = if (md?.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank()) notificationSong() else null
+        musicTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: fromNotif?.first ?: "Sin reproducción"
         CarState.song = md?.let { m ->
             listOfNotNull(m.getString(MediaMetadata.METADATA_KEY_TITLE), m.getString(MediaMetadata.METADATA_KEY_ARTIST)).joinToString(" - ").ifBlank { null }
         }
         musicArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
+            ?: fromNotif?.let { it.second.ifBlank { appName(it.third) } }
             ?: if (mc == null) "Toca para abrir música" else appName(mc.packageName)
         val art = md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         if (art != null) {
@@ -1488,6 +1534,8 @@ class MainActivity : Activity() {
             tickCount++
             runCatching {
                 if (tickCount % 60 == 0) refreshCommute()
+                // Algunos estéreos no avisan cuando aparece una fuente de música nueva: revisar seguido
+                if (tickCount % 3 == 0 && visible && !mediaNeedsAccess) recheckMedia()
                 if (tickCount % 1800 == 0 && tickCount > 0) refreshWeather()
             }
             handler.postDelayed(this, 1000L)
