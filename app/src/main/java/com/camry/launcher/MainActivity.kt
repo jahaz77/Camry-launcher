@@ -92,11 +92,13 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
+        Watchdog.start(this)
         skin = ThemeManager.current(this)
         val dm = resources.displayMetrics
         s = min(maxOf(dm.widthPixels, dm.heightPixels) / 1024f, min(dm.widthPixels, dm.heightPixels) / 600f)
         setContentView(buildUi())
         Profiles.onChange = { if (visible && !isFinishing) recreate() }
+        BtMeta.onChange = { if (!isFinishing) updateMusic() }
         CrashLog.unseen(this)?.let { err ->
             CrashLog.markSeen(this)
             handler.postDelayed({
@@ -889,7 +891,7 @@ class MainActivity : Activity() {
                         val tiles = tileTest()
                         Greeter.diagnose(this) { info ->
                         runOnUiThread {
-                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nMÚSICA: " + musicReport() + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this) + "\n\nÚLTIMO ERROR:\n" + (CrashLog.last(this) ?: "ninguno"))
+                            dialog().setTitle("Diagnóstico").setMessage(info + "\n\nRED: " + (if (online) "con internet" else "SIN internet") + "\n" + gpsInfo() + "\n" + ObdPairing.status() + "\nMAPA: " + tiles + "\nPERFIL: " + (Profiles.active(this)?.name ?: "ninguno") + " · teléfonos en Bluetooth de Android: " + Profiles.connectedPhones().joinToString { d -> runCatching { d.name }.getOrNull() ?: d.address }.ifEmpty { "ninguno" } + "\nLUCES: " + (Lights.name(this) ?: "sin elegir") + " · " + Lights.lastResult + "\n\nMÚSICA: " + musicReport() + "\nAvisos de música del estéreo (" + BtMeta.count + "):\n" + BtMeta.logText() + "\nAviso de llave: " + (prefs.getString("acc_action", null) ?: "ninguno recibido") + "\n\nBLUETOOTH DEL ESTÉREO:\n" + StereoBt.report(this) + "\n" + "\nSERVICIOS DE MÚSICA: " + BtAudio.browserServices(this).joinToString { it.packageName }.ifEmpty { "ninguno" } + "\n\nEVENTOS (más reciente arriba):\n" + EventLog.text(this) + "\n\nÚLTIMO ERROR:\n" + (CrashLog.last(this) ?: "ninguno") + "\n\nÚLTIMO CONGELAMIENTO:\n" + (Watchdog.last(this) ?: "ninguno"))
                                 .setPositiveButton("OK", null)
                                 .setNeutralButton("Ajustes de voz") { _, _ ->
                                     AppUtils.start(this, Intent("com.android.settings.TTS_SETTINGS"))
@@ -1423,15 +1425,22 @@ class MainActivity : Activity() {
         if (mediaNeedsAccess) return
         val mc = controller
         val md = mc?.metadata
-        val fromNotif = if (md?.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank()) notificationSong() else null
-        musicTitle.text = md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: fromNotif?.first ?: "Sin reproducción"
+        val noTitle = md?.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank()
+        val ctrlPlaying = mc?.playbackState?.state == PlaybackState.STATE_PLAYING
+        // Bluetooth del estéreo por avisos de fábrica: se usa si la sesión no trae canción o no está sonando
+        val bt = BtMeta.fresh()?.takeIf { it.title != null && (noTitle || (!ctrlPlaying && it.playing == true)) }
+        btTrack = bt
+        val fromNotif = if (bt == null && noTitle) notificationSong() else null
+        musicTitle.text = bt?.title ?: md?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: fromNotif?.first ?: "Sin reproducción"
         CarState.song = md?.let { m ->
             listOfNotNull(m.getString(MediaMetadata.METADATA_KEY_TITLE), m.getString(MediaMetadata.METADATA_KEY_ARTIST)).joinToString(" - ").ifBlank { null }
         }
-        musicArtist.text = md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
+        musicArtist.text = (bt?.let { it.artist ?: "Bluetooth" })
+            ?: md?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() }
             ?: fromNotif?.let { it.second.ifBlank { appName(it.third) } }
             ?: if (mc == null) "Toca para abrir música" else appName(mc.packageName)
-        val art = md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+        if (bt != null) CarState.song = listOfNotNull(bt.title, bt.artist).joinToString(" - ")
+        val art = if (bt != null) null else md?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         if (art != null) {
             musicArt.imageTintList = null
             musicArt.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1445,12 +1454,21 @@ class MainActivity : Activity() {
             musicArt.setImageResource(R.drawable.ic_music)
             musicProgress.progressTintList = ColorStateList.valueOf(Style.lighten(skin.accent, 0.15f))
         }
-        val playing = mc?.playbackState?.state == PlaybackState.STATE_PLAYING
+        val playing = if (bt != null) bt.playing == true else mc?.playbackState?.state == PlaybackState.STATE_PLAYING
         playBtn.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
         updateProgress()
     }
 
+    private var btTrack: BtMeta.Track? = null
+
     private fun updateProgress() {
+        btTrack?.let { t ->
+            val d = t.durationMs; val p = t.positionNow()
+            musicProgress.progress = if (d > 0 && p >= 0) (p.coerceAtMost(d) * 1000 / d).toInt() else 0
+            musicPos.text = if (p >= 0) fmt(p.coerceAtMost(if (d > 0) d else p)) else "--:--"
+            musicDur.text = if (d > 0) fmt(d) else "--:--"
+            return
+        }
         val mc = controller
         val dur = mc?.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         val st = mc?.playbackState
@@ -1483,7 +1501,7 @@ class MainActivity : Activity() {
     }
 
     private fun mediaKey(code: Int) {
-        val mc = controller
+        val mc = if (btTrack != null) null else controller
         if (mc != null && code == KeyEvent.KEYCODE_MEDIA_NEXT) { mc.transportControls.skipToNext(); return }
         if (mc != null && code == KeyEvent.KEYCODE_MEDIA_PREVIOUS) { mc.transportControls.skipToPrevious(); return }
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager

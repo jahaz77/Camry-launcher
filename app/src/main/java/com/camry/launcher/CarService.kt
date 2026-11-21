@@ -91,7 +91,14 @@ class CarService : Service() {
     override fun onCreate() {
         super.onCreate()
         CrashLog.install(this)
+        Watchdog.start(this)
         startForeground(1, buildNotification())
+        // canción del Bluetooth del estéreo por avisos de fábrica
+        runCatching { btMetaReceiver = BtMeta.register(this) }
+        // aviso de "llave puesta / quitada" que mandan algunos estéreos
+        runCatching {
+            registerReceiver(accReceiver, IntentFilter().apply { (ACC_ON + ACC_OFF).forEach { addAction(it) } })
+        }
         registerReceiver(receiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -118,11 +125,28 @@ class CarService : Service() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(receiver) }
+        runCatching { btMetaReceiver?.let { unregisterReceiver(it) } }
+        runCatching { unregisterReceiver(accReceiver) }
         EventLog.add(this, "Servicio detenido")
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private var btMetaReceiver: BroadcastReceiver? = null
+
+    private val accReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val a = intent.action ?: return
+            if (a in ACC_ON) {
+                EventLog.add(context, "Aviso del estéreo: llave puesta ($a)")
+                ThemeManager.prefs(context).edit().putString("acc_action", a).apply()
+                WakeLogic.carStarted(context, "aviso de llave del estéreo", goHome = true)
+            } else {
+                EventLog.add(context, "Aviso del estéreo: llave quitada ($a)")
+            }
+        }
+    }
 
     private fun buildNotification(): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -141,6 +165,18 @@ class CarService : Service() {
 
     companion object {
         private const val CHANNEL = "camry_service"
+
+        /** Avisos de "llave puesta" conocidos de varias marcas de estéreo (si el TS18 manda alguno, queda en el registro). */
+        val ACC_ON = listOf(
+            "com.fyt.boot.ACCON", "com.glsx.boot.ACCON", "com.cayboy.action.ACC_ON", "com.carboy.action.ACC_ON",
+            "android.intent.action.ACTION_BOOT_IPO", "com.tw.acc.on", "com.ts.acc.on", "com.topway.acc.on",
+            "com.microntek.acc.on", "android.intent.action.ACC_ON", "com.android.action.ACC_ON"
+        )
+        val ACC_OFF = listOf(
+            "com.fyt.boot.ACCOFF", "com.glsx.boot.ACCOFF", "com.cayboy.action.ACC_OFF", "com.carboy.action.ACC_OFF",
+            "android.intent.action.ACTION_SHUTDOWN_IPO", "com.tw.acc.off", "com.ts.acc.off", "com.topway.acc.off",
+            "com.microntek.acc.off", "android.intent.action.ACC_OFF", "com.android.action.ACC_OFF"
+        )
 
         fun start(ctx: Context) {
             runCatching { ctx.startForegroundService(Intent(ctx, CarService::class.java)) }
