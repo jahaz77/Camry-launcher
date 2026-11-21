@@ -44,6 +44,14 @@ object BtMeta {
         "com.autochips.bluetooth.avrcpct.AvrcpCtPlayerUtility.action.ACTION_PLAYBACK_DATA_UPDATE",
         "com.nwd.action.ACTION_BT_MUSIC_ID3",
         "com.clw.intent.MEDIA_INFO", "com.clw.intent.MEDIA_PLAY_STATE",
+        // conexión de teléfonos en el Bluetooth del estéreo (para los perfiles)
+        "com.goodocom.gocsdk.action.HFP_CONNECTED", "com.goodocom.gocsdk.action.CONNECT_STATE",
+        "com.goodocom.gocsdk.action.DEVICE_NAME", "com.goodocom.gocsdk.connect",
+        "com.ts.bt.connect", "com.ts.bt.state", "com.tw.bt.connect", "com.tw.bt.state", "com.tw.bt.device",
+        "com.microntek.bt.connect", "com.syu.bt.connect", "com.fyt.bt.connect",
+        "com.autochips.bluetooth.CONNECT_STATE", "com.nwd.action.ACTION_BT_CONNECT",
+        "android.bluetooth.headsetclient.profile.action.CONNECTION_STATE_CHANGED",
+        "android.bluetooth.a2dp-sink.profile.action.CONNECTION_STATE_CHANGED",
         // reproductores comunes
         "com.android.music.metachanged", "com.android.music.playstatechanged",
         "com.spotify.music.metadatachanged", "com.spotify.music.playbackstatechanged"
@@ -106,6 +114,22 @@ object BtMeta {
         val x = i.extras ?: return
         val action = i.action ?: return
         count++
+        // ¿algún dato del aviso trae el nombre del teléfono de un perfil?
+        val texts = x.keySet().mapNotNull { k ->
+            when (val v = runCatching { x.get(k) }.getOrNull()) {
+                is String -> v
+                is android.bluetooth.BluetoothDevice -> runCatching { v.name }.getOrNull()
+                else -> null
+            }
+        }
+        if (texts.isNotEmpty()) {
+            val clues = texts.map { StereoBt.Clue("aviso $action", it) }
+            Profiles.all(ctx).firstOrNull { p -> p.phoneName?.let { StereoBt.mentions(clues, it) } == true }?.let { p ->
+                if (Profiles.enabled(ctx) && Profiles.active(ctx)?.id != p.id) Profiles.activate(ctx, p, "aviso del Bluetooth del estéreo")
+            }
+            if (action.contains("connect", true) || action.contains("state", true) || action.contains("device", true))
+                addLog("conexión ${action.substringAfterLast("com.")}: " + texts.take(4).joinToString(" | "))
+        }
         val src = if (action.contains("bt", true) || action.contains("bluetooth", true) || action.contains("avrcp", true) || action.contains("a2dp", true)) "Bluetooth" else "Música"
         var title: String? = null; var artist: String? = null; var album: String? = null
         var playing: Boolean? = null; var dur = -1L; var pos = -1L

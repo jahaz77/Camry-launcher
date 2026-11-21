@@ -652,6 +652,27 @@ class MainActivity : Activity() {
         texts.addView(gap(8f))
         weatherText = label("", 14f, skin.text)
         texts.addView(weatherText)
+        // perfil activo: tocar cambia al siguiente (por si el teléfono no se detecta solo)
+        if (Profiles.enabled(this)) {
+            texts.addView(gap(8f))
+            val p = Profiles.active(this)
+            val chip = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(px(10f), px(5f), px(12f), px(5f))
+                background = GradientDrawable().apply { cornerRadius = 14f * s; setColor(Style.alpha(p?.accent ?: skin.accent, 40)); setStroke(1, Style.alpha(p?.accent ?: skin.accent, 110)) }
+                setOnClickListener {
+                    val all = Profiles.all(this@MainActivity)
+                    val next = all[(all.indexOfFirst { it.id == p?.id } + 1) % all.size]
+                    Profiles.activate(this@MainActivity, next, "cambio rápido en el inicio")
+                    toast("Perfil de ${next.name}")
+                }
+                setOnLongClickListener { startActivity(Intent(this@MainActivity, ProfilesActivity::class.java)); true }
+            }
+            chip.addView(View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(p?.accent ?: skin.textDim) } }, lp(px(8f), px(8f)))
+            chip.addView(gap(7f))
+            chip.addView(label(p?.name ?: "Elegir perfil", 13f, skin.text, medium = true))
+            texts.addView(chip, lp(WRAP, WRAP))
+        }
         c.addView(texts, lp(0, WRAP, 1f))
 
         val btns = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
