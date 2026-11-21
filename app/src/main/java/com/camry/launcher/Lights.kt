@@ -167,7 +167,7 @@ object Lights {
     private fun sendNow(app: Context, cmds: List<ByteArray>, attempt: Int) {
         val addr = address(app) ?: run { log(app, "no hay luces elegidas"); return }
         val ad = BluetoothAdapter.getDefaultAdapter() ?: run { log(app, "sin Bluetooth"); return }
-        if (!ad.isEnabled) { log(app, "el Bluetooth de Android está apagado"); return }
+        if (!ad.isEnabled && !AndroidBt.ensureOn(app, "luces", waitMs = 8000L)) { log(app, "el Bluetooth de Android está apagado"); return }
         if (busy) { h.postDelayed({ send(app, cmds, attempt) }, 1500L); return }
         busy = true
         val dev: BluetoothDevice = ad.getRemoteDevice(addr)

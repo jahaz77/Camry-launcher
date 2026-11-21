@@ -215,6 +215,8 @@ object WakeLogic {
             // Primero en segundo plano (sin abrir pantallas); si no funciona, el método anterior.
             BtAudio.activate(app) { ok, how ->
                 EventLog.add(app, "Audio Bluetooth ($reason) en segundo plano: " + (if (ok) "OK, " else "no, ") + how)
+                // aunque el audio quede listo, el estéreo pone su pantalla encima: regresar al launcher
+                if (ok && ThemeManager.prefs(app).getBoolean("wake_home", true)) goHome(app, "tras encender", firstDelay = 1500L)
                 if (!ok && ThemeManager.prefs(app).getBoolean("bt_open_fallback", true)) {
                     selfLaunchAt = SystemClock.elapsedRealtime()
                     val what = CarActions.openBluetoothMusic(app)
@@ -255,7 +257,8 @@ object WakeLogic {
     fun carStarted(ctx: Context, reason: String, goHome: Boolean, greetDelay: Long = 6000L) {
         val app = ctx.applicationContext
         val now = SystemClock.elapsedRealtime()
-        startWindowUntil = now + 45_000L
+        startWindowUntil = now + 75_000L
+        if (AndroidBt.needed(app)) Thread { AndroidBt.ensureOn(app, "encendido") }.start()
         reasserts = 0
         if (lastHandled != 0L && now - lastHandled < 30_000L) return
         lastHandled = now

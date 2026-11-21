@@ -16,7 +16,7 @@ object StereoBt {
 
     private fun btish(s: String): Boolean {
         val n = s.lowercase()
-        return n.contains("bt") || n.contains("blue") || n.contains("phone") || n.contains("dial") || n.contains("hfp") || n.contains("a2dp") || n.contains("tel")
+        return n.startsWith("com.tw.") || n.contains("topway") || n.contains("bt") || n.contains("blue") || n.contains("phone") || n.contains("dial") || n.contains("hfp") || n.contains("a2dp") || n.contains("tel")
     }
 
     private fun meaningful(v: String?): Boolean {
@@ -78,6 +78,32 @@ object StereoBt {
         if (want.length < 3) return false
         return clues.any { AppUtils.normalize(it.text).contains(want) }
     }
+
+    /** Apps del estéreo (Topway "com.tw.*", Bluetooth, música) con sus servicios y receptores: pistas para conectarnos. */
+    fun appsReport(ctx: Context): String = runCatching {
+        val pm = ctx.packageManager
+        val flags = android.content.pm.PackageManager.GET_SERVICES or android.content.pm.PackageManager.GET_RECEIVERS or android.content.pm.PackageManager.GET_PROVIDERS
+        pm.getInstalledPackages(0).map { it.packageName }.filter { p ->
+            val n = p.lowercase()
+            (n.startsWith("com.tw.") || n.contains("topway") || n.contains("bt") || n.contains("bluetooth") || n.contains("music") || n.contains("zlink") || n.contains("carassistant")) &&
+                !n.startsWith("com.google.") && n != ctx.packageName
+        }.sorted().joinToString("\n") { p ->
+            val info = runCatching { pm.getPackageInfo(p, flags) }.getOrNull()
+            fun short(names: List<String>?) = names.orEmpty().map { it.substringAfterLast('.') }.distinct().take(8).joinToString(",")
+            "• $p" +
+                info?.services?.map { it.name }?.let { if (it.isNotEmpty()) "\n   servicios: " + short(it) else "" }.orEmpty() +
+                info?.receivers?.map { it.name }?.let { if (it.isNotEmpty()) "\n   receptores: " + short(it) else "" }.orEmpty() +
+                info?.providers?.map { it.authority ?: it.name }?.let { if (it.isNotEmpty()) "\n   datos: " + it.take(4).joinToString(",") else "" }.orEmpty()
+        }.ifEmpty { "ninguna" }
+    }.getOrDefault("?")
+
+    /** Texto de todas las notificaciones (para ver si alguna trae la canción o el teléfono). */
+    fun notificationsText(ctx: Context): String = runCatching {
+        MediaListener.instance?.activeNotifications.orEmpty().filter { it.packageName != ctx.packageName }.joinToString("\n") { n ->
+            val ex = n.notification.extras
+            "• ${n.packageName}: " + listOfNotNull(ex?.getCharSequence("android.title"), ex?.getCharSequence("android.text")).joinToString(" / ").take(90)
+        }.ifEmpty { "ninguna" }
+    }.getOrDefault("?")
 
     /** Texto para Diagnóstico. */
     fun report(ctx: Context): String {

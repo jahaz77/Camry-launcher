@@ -46,6 +46,9 @@ object BtAudio {
     fun activate(ctx: Context, done: (ok: Boolean, how: String) -> Unit) {
         val app = ctx.applicationContext
         val chosen = btPackage(app)
+        if (chosen == "com.android.bluetooth" && !AndroidBt.isOn()) {
+            done(false, "el Bluetooth de Android está apagado (el celular va por el Bluetooth del estéreo)"); return
+        }
 
         // 1) Sesión ya activa
         val sessions = runCatching {

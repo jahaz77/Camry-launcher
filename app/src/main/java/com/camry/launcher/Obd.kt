@@ -104,6 +104,9 @@ object Obd {
         })
     }
 
+    @Volatile private var failures = 0
+    @Volatile private var lastError = ""
+
     private fun loop() {
         while (true) {
             val addr = address(app)
@@ -111,19 +114,28 @@ object Obd {
                 publish(Snapshot(status = "Elige tu adaptador en Opciones"))
                 SystemClock.sleep(5000); continue
             }
+            if (!AndroidBt.ensureOn(app, "OBD2", waitMs = 8000L)) {
+                publish(Snapshot(status = "Bluetooth de Android apagado"))
+                SystemClock.sleep(30_000); continue
+            }
             try {
                 publish(snap.copy(connected = false, status = "Conectando al OBD2…"))
                 val s = connect(addr)
                 socket = s
                 session(s.inputStream, s.outputStream)
             } catch (e: Exception) {
-                EventLog.add(app, "OBD2: ${e.javaClass.simpleName} ${e.message ?: ""}".trim())
+                // la causa real viene envuelta (InvocationTargetException): se muestra la de adentro
+                val root = generateSequence(e as Throwable) { it.cause }.last()
+                val msg = "OBD2: ${root.javaClass.simpleName} ${root.message ?: ""}".trim()
+                failures++
+                if (msg != lastError || failures % 30 == 0) { EventLog.add(app, msg + if (failures > 1) " (intento $failures)" else ""); lastError = msg }
             } finally {
                 runCatching { socket?.close() }
                 socket = null
             }
             publish(Snapshot(status = "OBD2 sin conectar · reintentando"))
-            SystemClock.sleep(10_000)
+            // reintentos cada vez más espaciados (10 s → 60 s) para no gastar
+            SystemClock.sleep((10_000L * (1 + failures / 6)).coerceAtMost(60_000L))
         }
     }
 
@@ -166,6 +178,7 @@ object Obd {
         val probe = cmd("0100", 8000) ?: throw java.io.IOException("el carro no responde (¿llave puesta?)")
         if (!clean(probe).contains("4100")) throw java.io.IOException("respuesta rara: ${clean(probe).take(20)}")
         EventLog.add(app, "OBD2 conectado")
+        failures = 0; lastError = ""
         var tick = 0
         var lastT = SystemClock.elapsedRealtime()
         var dist = 0.0
