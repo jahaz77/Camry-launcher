@@ -13,10 +13,31 @@ object AndroidBt {
 
     fun isOn(): Boolean = runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)
 
-    /** Lo prende si está apagado y espera hasta [waitMs]. Devuelve true si quedó prendido. */
+    /**
+     * OJO: en tu estéreo prender el Bluetooth de Android por código hizo que se reiniciara completo
+     * (choca con el Bluetooth del estéreo). Por eso ya NO se prende solo: solo si lo activas tú en Opciones.
+     */
+    fun autoAllowed(ctx: Context) = ThemeManager.prefs(ctx).getBoolean("android_bt_auto", false)
+    fun setAutoAllowed(ctx: Context, on: Boolean) = ThemeManager.prefs(ctx).edit().putBoolean("android_bt_auto", on).apply()
+
+    /** Una sola vez: apaga el Bluetooth de Android que encendió la versión 32. */
+    fun undoV32(ctx: Context) {
+        val p = ThemeManager.prefs(ctx)
+        if (p.getBoolean("bt_v32_undone", false)) return
+        p.edit().putBoolean("bt_v32_undone", true).apply()
+        if (autoAllowed(ctx)) return
+        val ad = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull() ?: return
+        if (ad.isEnabled) {
+            val ok = runCatching { @Suppress("DEPRECATION") ad.disable() }.getOrDefault(false)
+            EventLog.add(ctx, "Apagué el Bluetooth de Android que encendió la versión anterior: " + if (ok) "OK" else "no me dejó")
+        }
+    }
+
+    /** Lo prende si está apagado (solo si lo permitiste) y espera hasta [waitMs]. Devuelve true si quedó prendido. */
     fun ensureOn(ctx: Context, why: String, waitMs: Long = 0L): Boolean {
         val ad = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull() ?: return false
         if (ad.isEnabled) return true
+        if (!autoAllowed(ctx)) return false
         val now = SystemClock.elapsedRealtime()
         if (now - lastTry > 30_000L) {
             lastTry = now

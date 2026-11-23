@@ -116,7 +116,7 @@ object Obd {
             }
             if (!AndroidBt.ensureOn(app, "OBD2", waitMs = 8000L)) {
                 publish(Snapshot(status = "Bluetooth de Android apagado"))
-                SystemClock.sleep(30_000); continue
+                SystemClock.sleep(60_000); continue
             }
             try {
                 publish(snap.copy(connected = false, status = "Conectando al OBD2…"))

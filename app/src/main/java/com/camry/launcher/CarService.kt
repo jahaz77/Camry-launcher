@@ -92,6 +92,7 @@ class CarService : Service() {
         super.onCreate()
         CrashLog.install(this)
         Watchdog.start(this)
+        runCatching { AndroidBt.undoV32(this) }
         startForeground(1, buildNotification())
         // canción del Bluetooth del estéreo por avisos de fábrica
         runCatching { btMetaReceiver = BtMeta.register(this) }
@@ -258,7 +259,7 @@ object WakeLogic {
         val app = ctx.applicationContext
         val now = SystemClock.elapsedRealtime()
         startWindowUntil = now + 75_000L
-        if (AndroidBt.needed(app)) Thread { AndroidBt.ensureOn(app, "encendido") }.start()
+        // (ya no se prende el Bluetooth de Android al encender: reiniciaba el estéreo)
         reasserts = 0
         if (lastHandled != 0L && now - lastHandled < 30_000L) return
         lastHandled = now

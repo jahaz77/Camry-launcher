@@ -895,7 +895,8 @@ class MainActivity : Activity() {
             "Ajustes del estéreo",
             "Perfiles (Jahaz / Diana) y luces",
             "Animación de inicio: " + if (prefs.getBoolean("startup_anim", true)) "Sí" else "No",
-            "Ver la animación de inicio"
+            "Ver la animación de inicio",
+            "Prender Bluetooth de Android para OBD2 y luces: " + if (AndroidBt.autoAllowed(this)) "Sí" else "No"
         )
         dialog().setTitle("Opciones")
             .setItems(items) { _, which ->
@@ -940,6 +941,12 @@ class MainActivity : Activity() {
                     18 -> startActivity(Intent(this, ProfilesActivity::class.java))
                     19 -> togglePref("startup_anim", "La animación saldrá al encender", "Sin animación al encender")
                     20 -> playStartup()
+                    21 -> if (AndroidBt.autoAllowed(this)) {
+                        AndroidBt.setAutoAllowed(this, false); toast("Ya no se prenderá solo")
+                    } else dialog().setTitle("¿Prender el Bluetooth de Android?")
+                        .setMessage("Lo usan el OBD2 y las luces. Ojo: en tu estéreo, prenderlo por código hizo que se reiniciara completo al encender. Actívalo solo para probar; si se vuelve a reiniciar, ponlo en No.")
+                        .setPositiveButton("Activar") { _, _ -> AndroidBt.setAutoAllowed(this, true); Thread { AndroidBt.ensureOn(this, "lo activaste en Opciones") }.start() }
+                        .setNegativeButton("Cancelar", null).show()
                 }
             }
             .setNegativeButton("Cerrar", null)
